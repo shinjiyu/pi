@@ -21,8 +21,10 @@ import {
 	openSync,
 	readdirSync,
 	readSync,
+	renameSync,
 	type Stats,
 	statSync,
+	unlinkSync,
 	writeFileSync,
 } from "fs";
 import { readdir, stat } from "fs/promises";
@@ -1142,6 +1144,43 @@ export class SessionManager {
 		return this.cwd;
 	}
 
+	/**
+	 * Persist a selected working directory into the session header.
+	 * Used when the stored cwd is missing and the user picks a replacement (#11060).
+	 */
+	persistCwd(cwd: string): void {
+		const resolved = resolvePath(cwd);
+		this.cwd = resolved;
+		const header = this.fileEntries.find((entry) => entry.type === "session") as SessionHeader | undefined;
+		if (!header) return;
+		if (pathsEqual(resolvePath(header.cwd), resolved)) return;
+		header.cwd = resolved;
+		if (!this.persist || !this.sessionFile || !this.flushed) return;
+		this._rewriteFileAtomic();
+	}
+
+	/** Rewrite the session file via temp + rename so a crash cannot leave a truncated JSONL. */
+	private _rewriteFileAtomic(): void {
+		if (!this.persist || !this.sessionFile) return;
+		const temporaryPath = `${this.sessionFile}.tmp.${process.pid}.${Date.now()}`;
+		try {
+			const fd = openSync(temporaryPath, "w");
+			try {
+				for (const entry of this.fileEntries) {
+					writeFileSync(fd, `${JSON.stringify(entry)}\n`);
+				}
+			} finally {
+				closeSync(fd);
+			}
+			renameSync(temporaryPath, this.sessionFile);
+		} catch (error) {
+			try {
+				unlinkSync(temporaryPath);
+			} catch {}
+			throw error;
+		}
+	}
+
 	getSessionDir(): string {
 		return this.sessionDir;
 	}
@@ -1793,7 +1832,12 @@ export class SessionManager {
 		const cwd = cwdOverride ?? (header ? getSessionHeaderCwd(header) : undefined) ?? process.cwd();
 		// If no sessionDir provided, derive from file's parent directory
 		const dir = sessionDir ? normalizePath(sessionDir) : resolve(resolvedPath, "..");
-		return new SessionManager(cwd, dir, resolvedPath, true, undefined, preloadedFileEntries);
+		const manager = new SessionManager(cwd, dir, resolvedPath, true, undefined, preloadedFileEntries);
+		// Persist the chosen cwd so resume does not ask again (#11060).
+		if (cwdOverride !== undefined) {
+			manager.persistCwd(cwdOverride);
+		}
+		return manager;
 	}
 
 	/**

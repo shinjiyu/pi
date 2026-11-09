@@ -88,4 +88,23 @@ describe("session cwd handling", () => {
 		).rejects.toBeInstanceOf(MissingSessionCwdError);
 		expect(createRuntimeCalled).toBe(false);
 	});
+
+	it("persists a cwd override into the session header so resume does not ask again", () => {
+		// Regression for #11060.
+		const fallbackCwd = createTempDir("pi-session-cwd-persist");
+		const missingCwd = join(fallbackCwd, "does-not-exist");
+		const sessionDir = createTempDir("pi-session-cwd-persist-session-dir");
+		const sessionFile = join(sessionDir, "session.jsonl");
+		cleanupPaths.push(fallbackCwd, sessionDir);
+		writeSessionFile(sessionFile, missingCwd);
+
+		const sessionManager = SessionManager.open(sessionFile, undefined, fallbackCwd);
+		expect(sessionManager.getCwd()).toBe(fallbackCwd);
+		expect(getMissingSessionCwdIssue(sessionManager, fallbackCwd)).toBeUndefined();
+
+		const reopened = SessionManager.open(sessionFile);
+		expect(reopened.getCwd()).toBe(fallbackCwd);
+		expect(getMissingSessionCwdIssue(reopened, fallbackCwd)).toBeUndefined();
+	});
+
 });
