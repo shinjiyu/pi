@@ -522,6 +522,43 @@ export function resolveCliModel(options: {
 	};
 }
 
+export function formatDefaultModelFallbackMessage(
+	defaultProvider: string,
+	defaultModelId: string,
+	reason: string,
+	fallback: Pick<Model<Api>, "provider" | "id">,
+): string {
+	return `Could not use default model ${defaultProvider}/${defaultModelId} (${reason}). Using ${fallback.provider}/${fallback.id}.`;
+}
+
+export function selectInitialScopedModel(options: {
+	scopedModels: ScopedModel[];
+	defaultProvider?: string;
+	defaultModelId?: string;
+	savedModel?: Model<Api>;
+}): { scoped: ScopedModel; fallbackMessage: string | undefined } {
+	const { scopedModels, defaultProvider, defaultModelId, savedModel } = options;
+	const savedInScope = savedModel ? scopedModels.find((sm) => modelsAreEqual(sm.model, savedModel)) : undefined;
+	if (savedInScope) {
+		return { scoped: savedInScope, fallbackMessage: undefined };
+	}
+
+	const fallback = scopedModels[0];
+	if (!fallback) {
+		throw new Error("selectInitialScopedModel requires at least one scoped model");
+	}
+	const fallbackMessage =
+		defaultProvider && defaultModelId
+			? formatDefaultModelFallbackMessage(
+					defaultProvider,
+					defaultModelId,
+					savedModel ? "not in the current model scope" : "model no longer exists",
+					fallback.model,
+				)
+			: undefined;
+	return { scoped: fallback, fallbackMessage };
+}
+
 export interface InitialModelResult {
 	model: Model<Api> | undefined;
 	thinkingLevel: ThinkingLevel;
@@ -568,6 +605,7 @@ export async function findInitialModel(options: {
 	}
 
 	// 2. Try saved default from settings if auth is configured.
+	let unusedDefaultReason: string | undefined;
 	if (defaultProvider && defaultModelId) {
 		const found = modelRuntime.getModel(defaultProvider, defaultModelId);
 		if (found && modelRuntime.hasConfiguredAuth(found.provider)) {
@@ -580,7 +618,13 @@ export async function findInitialModel(options: {
 			}
 			return { model, thinkingLevel, fallbackMessage: undefined };
 		}
+		unusedDefaultReason = !found ? "model no longer exists" : "no auth configured";
 	}
+
+	const fallbackMessageFor = (fallback: Model<Api>): string | undefined =>
+		unusedDefaultReason && defaultProvider && defaultModelId
+			? formatDefaultModelFallbackMessage(defaultProvider, defaultModelId, unusedDefaultReason, fallback)
+			: undefined;
 
 	// 3. Try first available model with valid API key
 	const availableModels = [...modelRuntime.getAvailableSnapshot()];
@@ -591,12 +635,20 @@ export async function findInitialModel(options: {
 			const defaultId = defaultModelPerProvider[provider];
 			const match = availableModels.find((m) => m.provider === provider && m.id === defaultId);
 			if (match) {
-				return { model: match, thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+				return {
+					model: match,
+					thinkingLevel: DEFAULT_THINKING_LEVEL,
+					fallbackMessage: fallbackMessageFor(match),
+				};
 			}
 		}
 
 		// If no default found, use first available
-		return { model: availableModels[0], thinkingLevel: DEFAULT_THINKING_LEVEL, fallbackMessage: undefined };
+		return {
+			model: availableModels[0],
+			thinkingLevel: DEFAULT_THINKING_LEVEL,
+			fallbackMessage: fallbackMessageFor(availableModels[0]),
+		};
 	}
 
 	// 4. No model found

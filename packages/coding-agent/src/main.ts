@@ -6,7 +6,7 @@
  */
 
 import { createInterface } from "node:readline";
-import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { setCapabilityOverrides } from "@earendil-works/pi-tui";
 import chalk from "chalk";
 import { type Args, type Mode, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
@@ -48,7 +48,12 @@ import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
-import { resolveCliModel, resolveModelScopeWithDiagnostics, type ScopedModel } from "./core/model-resolver.ts";
+import {
+	resolveCliModel,
+	resolveModelScopeWithDiagnostics,
+	type ScopedModel,
+	selectInitialScopedModel,
+} from "./core/model-resolver.ts";
 import { ModelRuntime } from "./core/model-runtime.ts";
 import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
 import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
@@ -545,24 +550,22 @@ function buildSessionOptions(
 	}
 
 	if (!options.model && scopedModels.length > 0 && !hasExistingSession) {
-		// Check if saved default is in scoped models - use it if so, otherwise first scoped model
+		// Use the saved default when it is in scope; otherwise first scoped model, with a warning.
 		const savedProvider = settingsManager.getDefaultProvider();
 		const savedModelId = settingsManager.getDefaultModel();
 		const savedModel = savedProvider && savedModelId ? modelRuntime.getModel(savedProvider, savedModelId) : undefined;
-		const savedInScope = savedModel ? scopedModels.find((sm) => modelsAreEqual(sm.model, savedModel)) : undefined;
-
-		if (savedInScope) {
-			options.model = savedInScope.model;
-			// Use thinking level from scoped model config if explicitly set
-			if (!parsed.thinking && savedInScope.thinkingLevel) {
-				options.thinkingLevel = savedInScope.thinkingLevel;
-			}
-		} else {
-			options.model = scopedModels[0].model;
-			// Use thinking level from first scoped model if explicitly set
-			if (!parsed.thinking && scopedModels[0].thinkingLevel) {
-				options.thinkingLevel = scopedModels[0].thinkingLevel;
-			}
+		const selected = selectInitialScopedModel({
+			scopedModels,
+			defaultProvider: savedProvider,
+			defaultModelId: savedModelId,
+			savedModel,
+		});
+		options.model = selected.scoped.model;
+		if (!parsed.thinking && selected.scoped.thinkingLevel) {
+			options.thinkingLevel = selected.scoped.thinkingLevel;
+		}
+		if (selected.fallbackMessage) {
+			diagnostics.push({ type: "warning", message: selected.fallbackMessage });
 		}
 	}
 
