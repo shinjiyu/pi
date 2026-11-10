@@ -11,10 +11,12 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
 import {
 	defaultModelPerProvider,
 	findInitialModel,
+	formatDefaultModelFallbackMessage,
 	type ModelReferenceRequest,
 	resolveCliModel,
 	resolveModelReference,
 	resolveModelScopeWithDiagnostics,
+	selectInitialScopedModel,
 } from "../src/core/model-resolver.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
@@ -753,7 +755,7 @@ describe("default model selection", () => {
 		expect(result.model?.id).toBe("anthropic/claude-opus-4-6");
 	});
 
-	test("findInitialModel ignores an unauthenticated saved default", async () => {
+	test("findInitialModel warns when an unauthenticated saved default is ignored", async () => {
 		const savedDeepSeekModel: Model<"anthropic-messages"> = {
 			id: "deepseek-v4-flash",
 			name: "DeepSeek V4 Flash",
@@ -790,6 +792,157 @@ describe("default model selection", () => {
 
 		expect(result.model?.provider).toBe("spark-two");
 		expect(result.model?.id).toBe("deepseek-v4-flash");
+		expect(result.fallbackMessage).toBe(
+			"Could not use default model deepseek/deepseek-v4-flash (no auth configured). Using spark-two/deepseek-v4-flash.",
+		);
+	});
+
+	// #10812
+	test("findInitialModel warns when the saved default is missing from the catalog", async () => {
+		const replacementModel: Model<"anthropic-messages"> = {
+			id: "deepseek-v4-pro",
+			name: "DeepSeek V4 Pro",
+			api: "anthropic-messages",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		};
+		const registry = {
+			getModel: () => undefined,
+			hasConfiguredAuth: (provider: string) => provider === "deepseek",
+			getAvailableSnapshot: () => [replacementModel],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
+
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			defaultProvider: "deepseek",
+			defaultModelId: "deepseek-v4-flash",
+			modelRuntime: registry,
+		});
+
+		expect(result.model?.provider).toBe("deepseek");
+		expect(result.model?.id).toBe("deepseek-v4-pro");
+		expect(result.fallbackMessage).toBe(
+			formatDefaultModelFallbackMessage("deepseek", "deepseek-v4-flash", "model no longer exists", replacementModel),
+		);
+	});
+
+	test("findInitialModel does not warn when no saved default is set", async () => {
+		const available: Model<"anthropic-messages"> = {
+			id: "deepseek-v4-pro",
+			name: "DeepSeek V4 Pro",
+			api: "anthropic-messages",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		};
+		const registry = {
+			getModel: () => undefined,
+			hasConfiguredAuth: () => true,
+			getAvailableSnapshot: () => [available],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
+
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			modelRuntime: registry,
+		});
+
+		expect(result.model?.id).toBe("deepseek-v4-pro");
+		expect(result.fallbackMessage).toBeUndefined();
+	});
+
+	test("findInitialModel does not warn when the saved default is available", async () => {
+		const saved: Model<"anthropic-messages"> = {
+			id: "deepseek-flash",
+			name: "DeepSeek Flash",
+			api: "anthropic-messages",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		};
+		const registry = {
+			getModel: (provider: string, modelId: string) =>
+				provider === "deepseek" && modelId === "deepseek-flash" ? saved : undefined,
+			hasConfiguredAuth: (provider: string) => provider === "deepseek",
+			getAvailableSnapshot: () => [saved],
+		} as unknown as Parameters<typeof findInitialModel>[0]["modelRuntime"];
+
+		const result = await findInitialModel({
+			scopedModels: [],
+			isContinuing: false,
+			defaultProvider: "deepseek",
+			defaultModelId: "deepseek-flash",
+			modelRuntime: registry,
+		});
+
+		expect(result.model).toEqual(saved);
+		expect(result.fallbackMessage).toBeUndefined();
+	});
+
+	test("selectInitialScopedModel warns when the saved default is outside the model scope", () => {
+		const flash: Model<"anthropic-messages"> = {
+			id: "deepseek-flash",
+			name: "DeepSeek Flash",
+			api: "anthropic-messages",
+			provider: "deepseek",
+			baseUrl: "https://api.deepseek.com",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 1 },
+			contextWindow: 128000,
+			maxTokens: 8192,
+		};
+		const pro: Model<"anthropic-messages"> = { ...flash, id: "deepseek-v4-pro", name: "DeepSeek V4 Pro" };
+
+		const inScope = selectInitialScopedModel({
+			scopedModels: [{ model: flash, thinkingLevel: "low" }, { model: pro }],
+			defaultProvider: "deepseek",
+			defaultModelId: "deepseek-v4-pro",
+			savedModel: pro,
+		});
+		expect(inScope.scoped.model).toEqual(pro);
+		expect(inScope.fallbackMessage).toBeUndefined();
+
+		const missing = selectInitialScopedModel({
+			scopedModels: [{ model: pro }],
+			defaultProvider: "deepseek",
+			defaultModelId: "deepseek-v4-flash",
+		});
+		expect(missing.scoped.model).toEqual(pro);
+		expect(missing.fallbackMessage).toBe(
+			formatDefaultModelFallbackMessage("deepseek", "deepseek-v4-flash", "model no longer exists", pro),
+		);
+
+		const outOfScope = selectInitialScopedModel({
+			scopedModels: [{ model: pro }],
+			defaultProvider: "deepseek",
+			defaultModelId: "deepseek-flash",
+			savedModel: flash,
+		});
+		expect(outOfScope.scoped.model).toEqual(pro);
+		expect(outOfScope.fallbackMessage).toBe(
+			formatDefaultModelFallbackMessage("deepseek", "deepseek-flash", "not in the current model scope", pro),
+		);
+
+		const noDefault = selectInitialScopedModel({
+			scopedModels: [{ model: pro }],
+		});
+		expect(noDefault.scoped.model).toEqual(pro);
+		expect(noDefault.fallbackMessage).toBeUndefined();
 	});
 
 	describe("persisted default model scoping", () => {
