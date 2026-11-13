@@ -393,6 +393,52 @@ describe("AuthStorage", () => {
 		});
 	});
 
+	test.skipIf(process.platform === "win32")(
+		"locks a symlink when the real auth.json directory is not writable",
+		async () => {
+			const storeDir = join(tempDir, "immutable-store");
+			mkdirSync(storeDir);
+			const realFile = join(storeDir, "pi-auth.json");
+			writeFileSync(realFile, JSON.stringify({ anthropic: { type: "api_key", key: "stored" } }));
+			const aliasPath = join(tempDir, "auth-link.json");
+			symlinkSync(realFile, aliasPath);
+			chmodSync(storeDir, 0o555);
+			try {
+				const backend = new FileAuthStorageBackend(aliasPath);
+				expect(JSON.parse(backend.withLock((current) => ({ result: current ?? "" }))).anthropic.key).toBe("stored");
+				await expect(backend.withLockAsync(async (current) => ({ result: current ?? "" }))).resolves.toContain(
+					"stored",
+				);
+				expect(existsSync(`${aliasPath}.lock`)).toBe(false);
+				expect(existsSync(`${realFile}.lock`)).toBe(false);
+			} finally {
+				chmodSync(storeDir, 0o755);
+			}
+		},
+	);
+
+	test("falls back to the given path when locking the real file fails with EROFS", async () => {
+		writeAuthJson({ anthropic: { type: "api_key", key: "stored" } });
+		const aliasPath = join(tempDir, "alias-erofs.json");
+		symlinkSync(authJsonPath, aliasPath);
+		const throwUnlessLiteral = (options: { realpath?: boolean } | undefined) => {
+			if (options?.realpath !== false) {
+				throw Object.assign(new Error("EROFS: read-only file system, mkdir lock"), { code: "EROFS" });
+			}
+		};
+		vi.spyOn(lockfile, "lockSync").mockImplementation((_file, options) => {
+			throwUnlessLiteral(options);
+			return () => {};
+		});
+		vi.spyOn(lockfile, "lock").mockImplementation(async (_file, options) => {
+			throwUnlessLiteral(options);
+			return async () => {};
+		});
+		const backend = new FileAuthStorageBackend(aliasPath);
+		expect(JSON.parse(backend.withLock((current) => ({ result: current ?? "" }))).anthropic.key).toBe("stored");
+		await expect(backend.withLockAsync(async (current) => ({ result: current ?? "" }))).resolves.toContain("stored");
+	});
+
 	test("aborts while waiting for a held file lock without running the mutation later", async () => {
 		writeAuthJson({ anthropic: { type: "api_key", key: "stored" } });
 		const release = await lockfile.lock(authJsonPath, { realpath: false });

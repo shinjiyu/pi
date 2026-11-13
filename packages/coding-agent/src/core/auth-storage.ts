@@ -28,6 +28,15 @@ function getRetryableLockErrorCode(error: unknown): "ELOCKED" | "EPERM" | undefi
 	return undefined;
 }
 
+function getLockErrorCode(error: unknown): string | undefined {
+	return error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : undefined;
+}
+
+function isUnwritableLockDirError(error: unknown): boolean {
+	const code = getLockErrorCode(error);
+	return code === "EROFS" || code === "EACCES";
+}
+
 type LockResult<T> = {
 	result: T;
 	next?: string;
@@ -81,11 +90,18 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 	private acquireLockSyncWithRetry(path: string): () => void {
 		const maxAttempts = 10;
 		const delayMs = 20;
+		// Prefer the real path so aliases share one lock (#11655). If that path is on a
+		// read-only volume (Nix store, password vault), lock the given path instead so the
+		// lock file can be created beside a writable symlink.
+		let useLiteralPath = false;
 		for (let attempt = 1; ; attempt++) {
 			try {
-				// Lock the resolved file so symlinked aliases of auth.json share one lock (#11655).
-				return lockfile.lockSync(path);
+				return useLiteralPath ? lockfile.lockSync(path, { realpath: false }) : lockfile.lockSync(path);
 			} catch (error) {
+				if (!useLiteralPath && isUnwritableLockDirError(error)) {
+					useLiteralPath = true;
+					continue;
+				}
 				if (!getRetryableLockErrorCode(error) || attempt === maxAttempts) throw error;
 				const start = Date.now();
 				while (Date.now() - start < delayMs) {
@@ -124,18 +140,25 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
 		const deadline = Date.now() + staleMs;
 		let retry = 0;
 		let epermRetries = 0;
+		let useLiteralPath = false;
 		while (true) {
 			signal?.throwIfAborted();
 			let release: (() => Promise<void>) | undefined;
 			try {
-				// Lock the resolved file so symlinked aliases of auth.json share one lock (#11655).
+				// Lock the resolved file so aliases share one lock (#11655). Fall back to the
+				// given path when the real file's directory is not writable.
 				release = await lockfile.lock(this.authPath, {
 					retries: 0,
 					stale: staleMs,
 					onCompromised,
+					...(useLiteralPath ? { realpath: false as const } : {}),
 				});
 			} catch (error) {
 				signal?.throwIfAborted();
+				if (!useLiteralPath && isUnwritableLockDirError(error)) {
+					useLiteralPath = true;
+					continue;
+				}
 				const code = getRetryableLockErrorCode(error);
 				const remainingMs = deadline - Date.now();
 				if (!code || remainingMs <= 0) throw error;
