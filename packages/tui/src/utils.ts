@@ -405,16 +405,34 @@ export function getGraphemeCellRange(line: string, column: number): GraphemeCell
 	return undefined;
 }
 
-/** Return the OSC 8 hyperlink covering a visible terminal column. */
-export function getOsc8LinkAtColumn(line: string, column: number): string | undefined {
+const OSC8_HYPERLINK = /^\x1b\]8;[^;]*;([^\x07\x1b]*)(?:\x07|\x1b\\)$/;
+
+export interface Osc8LinkSpan {
+	url: string;
+	start: number;
+	end: number;
+}
+
+/** Return the OSC 8 hyperlink covering a visible terminal column, with its visible column span. */
+export function getOsc8LinkSpanAtColumn(line: string, column: number): Osc8LinkSpan | undefined {
 	let activeUrl: string | undefined;
+	let spanStart = 0;
 	let currentCol = 0;
 	let i = 0;
+	const spanIfHit = (): Osc8LinkSpan | undefined =>
+		activeUrl && column >= spanStart && column < currentCol
+			? { url: activeUrl, start: spanStart, end: currentCol }
+			: undefined;
 	while (i < line.length) {
 		const ansi = extractAnsiCode(line, i);
 		if (ansi) {
-			const hyperlink = /^\x1b\]8;[^;]*;([^\x07\x1b]*)(?:\x07|\x1b\\)$/.exec(ansi.code);
-			if (hyperlink) activeUrl = hyperlink[1] || undefined;
+			const hyperlink = OSC8_HYPERLINK.exec(ansi.code);
+			if (hyperlink) {
+				const hit = spanIfHit();
+				if (hit) return hit;
+				activeUrl = hyperlink[1] || undefined;
+				spanStart = currentCol;
+			}
 			i += ansi.length;
 			continue;
 		}
@@ -422,12 +440,16 @@ export function getOsc8LinkAtColumn(line: string, column: number): string | unde
 		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
 		for (const { segment } of graphemeSegmenter.segment(line.slice(i, textEnd))) {
 			const width = segment === "\t" ? 3 : graphemeWidth(segment);
-			if (column >= currentCol && column < currentCol + width) return activeUrl;
 			currentCol += width;
 		}
 		i = textEnd;
 	}
-	return undefined;
+	return spanIfHit();
+}
+
+/** Return the OSC 8 hyperlink covering a visible terminal column. */
+export function getOsc8LinkAtColumn(line: string, column: number): string | undefined {
+	return getOsc8LinkSpanAtColumn(line, column)?.url;
 }
 
 /**

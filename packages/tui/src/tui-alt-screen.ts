@@ -52,6 +52,7 @@ import {
 	extractAnsiCode,
 	getGraphemeCellRange,
 	getOsc8LinkAtColumn,
+	getOsc8LinkSpanAtColumn,
 	getWordSegmenter,
 	sliceByColumn,
 	stripTerminalSequences,
@@ -1188,13 +1189,34 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	private getWordSelection(point: SelectionPoint): SelectionRange | undefined {
-		const line = stripTerminalSequences(this.getSelectionSourceLine(point));
-		const segments: Array<{ start: number; end: number; selectable: boolean; joiner: boolean }> = [];
+		const rawLine = this.getSelectionSourceLine(point);
+		const link = getOsc8LinkSpanAtColumn(rawLine, point.col);
+		if (link) {
+			return {
+				start: { ...point, col: link.start },
+				end: { ...point, col: link.end, boundary: true },
+			};
+		}
+
+		const line = stripTerminalSequences(rawLine);
+		const segments: Array<{
+			start: number;
+			end: number;
+			selectable: boolean;
+			joiner: boolean;
+			trailingDot: boolean;
+		}> = [];
 		let start = 0;
 		for (const segment of wordSegmenter.segment(line)) {
 			const end = start + visibleWidth(segment.segment);
 			const joiner = TERMINAL_WORD_SELECTION_JOINERS.has(segment.segment);
-			segments.push({ start, end, selectable: segment.isWordLike === true || joiner, joiner });
+			segments.push({
+				start,
+				end,
+				selectable: segment.isWordLike === true || joiner,
+				joiner,
+				trailingDot: segment.segment === ".",
+			});
 			start = end;
 		}
 		const clickedSegmentIndex = segments.findIndex(
@@ -1206,21 +1228,24 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			left: { selectable: boolean; joiner: boolean },
 			right: { selectable: boolean; joiner: boolean },
 		): boolean => left.selectable && right.selectable && (left.joiner || right.joiner);
-		let selectionStart = segments[clickedSegmentIndex].start;
-		let selectionEnd = segments[clickedSegmentIndex].end;
+		let startIndex = clickedSegmentIndex;
+		let endIndex = clickedSegmentIndex;
 		for (let index = clickedSegmentIndex; index > 0 && canJoin(segments[index - 1], segments[index]); index--) {
-			selectionStart = segments[index - 1].start;
+			startIndex = index - 1;
 		}
 		for (
 			let index = clickedSegmentIndex;
 			index < segments.length - 1 && canJoin(segments[index], segments[index + 1]);
 			index++
 		) {
-			selectionEnd = segments[index + 1].end;
+			endIndex = index + 1;
+		}
+		while (endIndex > startIndex && segments[endIndex].trailingDot) {
+			endIndex--;
 		}
 		return {
-			start: { ...point, col: selectionStart },
-			end: { ...point, col: selectionEnd, boundary: true },
+			start: { ...point, col: segments[startIndex].start },
+			end: { ...point, col: segments[endIndex].end, boundary: true },
 		};
 	}
 

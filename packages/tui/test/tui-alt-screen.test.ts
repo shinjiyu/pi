@@ -1706,6 +1706,45 @@ describe("TuiAltScreen", () => {
 		}
 	});
 
+	it("keeps URL schemes and drops trailing periods in fullscreen double-click selection", async () => {
+		const url = "https://github.com/org/repo/pull/1";
+		const belUrl = `\x1b]8;;${url}\x07${url}\x1b]8;;\x07`;
+		for (const { line, needle, expected } of [
+			{ line: hyperlink(url, url), needle: "github", expected: url },
+			{ line: hyperlink(url, url), needle: "https", expected: url },
+			{ line: belUrl, needle: "org", expected: url },
+			{ line: `see ${hyperlink(url, url)}.`, needle: "repo", expected: url },
+			{ line: "see src/config/url.zig.", needle: "config", expected: "src/config/url.zig" },
+			{ line: "Version v1.2.3.", needle: "v1", expected: "v1.2.3" },
+			{ line: "compositor.ts", needle: "ts", expected: "compositor.ts" },
+			{ line: "Note: hello", needle: "Note", expected: "Note" },
+		]) {
+			const copied: string[] = [];
+			const terminal = new RecordingTerminal(80, 1);
+			const tui = new TuiAltScreen(terminal, undefined, undefined, {
+				copySelection: async (text) => {
+					copied.push(text);
+					return true;
+				},
+			});
+			tui.addChild(new Text(line, 0, 0));
+			tui.start();
+			await terminal.waitForRender();
+
+			const visible = stripTerminalSequences(line);
+			const oneBasedClickColumn = visible.indexOf(needle) + 1;
+			assert.ok(oneBasedClickColumn > 0, `needle ${JSON.stringify(needle)} missing from ${JSON.stringify(visible)}`);
+			terminal.sendInput(`\x1b[<0;${oneBasedClickColumn};1M`);
+			terminal.sendInput(`\x1b[<0;${oneBasedClickColumn};1m`);
+			terminal.sendInput(`\x1b[<0;${oneBasedClickColumn};1M`);
+			terminal.sendInput(`\x1b[<0;${oneBasedClickColumn};1m`);
+			await terminal.waitForRender();
+
+			assert.deepStrictEqual(copied, [expected], `clicking ${JSON.stringify(needle)} in ${JSON.stringify(visible)}`);
+			tui.stop();
+		}
+	});
+
 	it("highlights a complete whitespace segment during a word drag", async () => {
 		const terminal = new RecordingTerminal(20, 1);
 		const tui = new TuiAltScreen(terminal);
