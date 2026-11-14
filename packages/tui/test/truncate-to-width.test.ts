@@ -1,6 +1,13 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { normalizeTerminalOutput, truncateToWidth, visibleWidth } from "../src/utils.ts";
+import { hyperlink } from "../src/terminal-image.ts";
+import {
+	getOsc8LinkAtColumn,
+	getOsc8LinkSpanAtColumn,
+	normalizeTerminalOutput,
+	truncateToWidth,
+	visibleWidth,
+} from "../src/utils.ts";
 
 describe("truncateToWidth", () => {
 	it("keeps output within width for very large unicode input", () => {
@@ -123,5 +130,22 @@ describe("visibleWidth", () => {
 		assert.strictEqual(normalizeTerminalOutput("ຳ"), "ໍາ");
 		assert.strictEqual(visibleWidth(normalizeTerminalOutput("ำabc")), visibleWidth("ำabc"));
 		assert.strictEqual(visibleWidth(normalizeTerminalOutput("ຳabc")), visibleWidth("ຳabc"));
+	});
+});
+
+describe("getOsc8LinkSpanAtColumn", () => {
+	it("returns the visible span for ST and BEL terminated links", () => {
+		const url = "https://example.com/path";
+		const st = `prefix ${hyperlink(url, url)}!`;
+		const bel = `prefix \x1b]8;;${url}\x07${url}\x1b]8;;\x07!`;
+		const start = "prefix ".length;
+		const end = start + url.length;
+		for (const line of [st, bel]) {
+			assert.deepStrictEqual(getOsc8LinkSpanAtColumn(line, start), { url, start, end });
+			assert.deepStrictEqual(getOsc8LinkSpanAtColumn(line, end - 1), { url, start, end });
+			assert.strictEqual(getOsc8LinkAtColumn(line, start), url);
+			assert.strictEqual(getOsc8LinkSpanAtColumn(line, start - 1), undefined);
+			assert.strictEqual(getOsc8LinkSpanAtColumn(line, end), undefined);
+		}
 	});
 });
