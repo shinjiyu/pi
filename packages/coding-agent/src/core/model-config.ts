@@ -49,6 +49,12 @@ const ModelFieldDescriptions = {
 const ModelDefinitionSchema = Type.Object({
 	id: Type.String({ minLength: 1, description: "Model ID sent to the API." }),
 	name: Type.Optional(Type.String({ minLength: 1, description: ModelFieldDescriptions.name })),
+	type: Type.Optional(
+		Type.Union([Type.Literal("chat"), Type.Literal("classifier")], {
+			description:
+				"What the model is for. Omitted type is chat, except when api is a known classifier API: typesafe-system-one, cloudflare-workers-ai-system-one, llama-cpp-classify, or openai-decisions.",
+		}),
+	),
 	api: Type.Optional(Type.String({ minLength: 1, description: "Overrides the provider api." })),
 	baseUrl: Type.Optional(Type.String({ minLength: 1, description: "Overrides the provider baseUrl." })),
 	reasoning: Type.Optional(Type.Boolean({ default: false, description: ModelFieldDescriptions.reasoning })),

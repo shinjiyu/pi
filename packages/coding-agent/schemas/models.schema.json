@@ -77,6 +77,19 @@
                     "minLength": 1,
                     "description": "Display name, also matched by --model patterns."
                   },
+                  "type": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "const": "chat"
+                      },
+                      {
+                        "type": "string",
+                        "const": "classifier"
+                      }
+                    ],
+                    "description": "What the model is for. Omitted type is chat, except when api is a known classifier API: typesafe-system-one, cloudflare-workers-ai-system-one, llama-cpp-classify, or openai-decisions."
+                  },
                   "api": {
                     "type": "string",
                     "minLength": 1,

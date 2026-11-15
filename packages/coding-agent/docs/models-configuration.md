@@ -25,12 +25,13 @@ Each key under `providers` is a provider ID. A built-in provider ID changes that
 
 ## Models
 
-Each `models` entry adds a model to the provider. An entry whose `id` matches an existing model replaces it.
+Each `models` entry adds a model to the provider. An entry whose `id` and type match an existing model replaces it. Entries without `type` are chat models, except when `api` is a known classifier API.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `id` | string |  | Required. Model ID sent to the API. |
 | `name` | string |  | Display name, also matched by --model patterns. |
+| `type` | `"chat" \| "classifier"` |  | What the model is for. Omitted type is chat, except when api is a known classifier API: typesafe-system-one, cloudflare-workers-ai-system-one, llama-cpp-classify, or openai-decisions. |
 | `api` | string |  | Overrides the provider api. |
 | `baseUrl` | string |  | Overrides the provider baseUrl. |
 | `reasoning` | boolean | `false` | Whether the model supports thinking. |

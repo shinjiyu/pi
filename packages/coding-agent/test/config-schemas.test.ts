@@ -139,6 +139,27 @@ describe("generated configuration schemas", () => {
 		expect(validator.Check(invalid)).toBe(false);
 	});
 
+	it("accepts models.json classifier type and rejects an invalid type", () => {
+		const schema = JSON.parse(renderConfigSchemas().get("schemas/models.schema.json") ?? "");
+		const validator = Compile(schema);
+		expect(
+			validator.Check({
+				providers: {
+					custom: {
+						baseUrl: "http://localhost/v1",
+						models: [
+							{ id: "a", type: "classifier", api: "typesafe-system-one" },
+							{ id: "b", type: "chat" },
+							{ id: "c", api: "typesafe-system-one" },
+						],
+					},
+				},
+			}),
+		).toBe(true);
+		expect(validator.Check({ providers: { custom: { models: [{ id: "a", type: "image" }] } } })).toBe(false);
+		expect(validator.Check({ providers: { custom: { models: [{ id: "a", type: "foo" }] } } })).toBe(false);
+	});
+
 	it("rejects non-positive model token limits", () => {
 		const schema = JSON.parse(renderConfigSchemas().get("schemas/models.schema.json") ?? "");
 		const validator = Compile(schema);

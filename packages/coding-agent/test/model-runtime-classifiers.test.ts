@@ -119,4 +119,80 @@ describe("ModelRuntime classifiers", () => {
 		]);
 		expect(request.headers.has("typesafe-danger-zone-images")).toBe(false);
 	});
+
+	it("registers models.json entries with typesafe-system-one as classifiers (#12140)", async () => {
+		const runtime = await createRuntime({
+			providers: {
+				custom: {
+					baseUrl: "https://api.example.com/v1",
+					apiKey: "secret",
+					models: [
+						{
+							id: "my-classifier-model",
+							name: "OneJev1.6-27B",
+							api: "typesafe-system-one",
+							input: ["text", "image"],
+						},
+					],
+				},
+			},
+		});
+		const model = runtime.getModelOfType("classifier", "custom", "my-classifier-model");
+		expect(model).toMatchObject({
+			type: "classifier",
+			api: "typesafe-system-one",
+			name: "OneJev1.6-27B",
+			input: ["text", "image"],
+		});
+		expect(runtime.getModel("custom", "my-classifier-model")).toBeUndefined();
+	});
+
+	it("registers models.json entries with an explicit classifier type", async () => {
+		const runtime = await createRuntime({
+			providers: {
+				custom: {
+					baseUrl: "https://api.example.com/v1",
+					apiKey: "secret",
+					models: [{ id: "media-classifier", type: "classifier", api: "media-classifier" }],
+				},
+			},
+		});
+		const model = runtime.getModelOfType("classifier", "custom", "media-classifier");
+		expect(model).toMatchObject({ type: "classifier", api: "media-classifier" });
+		expect(runtime.getModel("custom", "media-classifier")).toBeUndefined();
+	});
+
+	it("keeps models.json chat entries out of the classifier list", async () => {
+		const runtime = await createRuntime({
+			providers: {
+				custom: {
+					baseUrl: "https://api.example.com/v1",
+					api: "openai-completions",
+					apiKey: "secret",
+					models: [{ id: "local-chat", name: "Local Chat" }],
+				},
+			},
+		});
+		expect(runtime.getModel("custom", "local-chat")).toMatchObject({ id: "local-chat", name: "Local Chat" });
+		expect(runtime.getModelOfType("classifier", "custom", "local-chat")).toBeUndefined();
+	});
+
+	it("replaces a built-in classifier when models.json repeats its id", async () => {
+		const runtime = await createRuntime({
+			providers: {
+				typesafe: {
+					models: [
+						{
+							id: "jev-latest",
+							api: "typesafe-system-one",
+							name: "Custom Jev",
+							contextWindow: 1000,
+						},
+					],
+				},
+			},
+		});
+		const model = runtime.getModelOfType("classifier", "typesafe", "jev-latest");
+		expect(model).toMatchObject({ type: "classifier", name: "Custom Jev", contextWindow: 1000 });
+	});
 });

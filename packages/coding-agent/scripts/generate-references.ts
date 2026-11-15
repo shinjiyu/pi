@@ -69,7 +69,7 @@ const referenceArtifacts: readonly ReferenceArtifact[] = [
 			},
 			{
 				heading: "Models",
-				intro: "Each `models` entry adds a model to the provider. An entry whose `id` matches an existing model replaces it.",
+				intro: "Each `models` entry adds a model to the provider. An entry whose `id` and type match an existing model replaces it. Entries without `type` are chat models, except when `api` is a known classifier API.",
 				schema: ModelsJsonSchemas.model,
 				links: { inputLimits: "#input-limits", compat: "#compatibility" },
 			},

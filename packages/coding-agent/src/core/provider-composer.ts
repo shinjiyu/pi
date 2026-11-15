@@ -14,6 +14,7 @@ import {
 	lazyStream,
 	type Model,
 	type ModelAuth,
+	type ModelType,
 	type OAuthAuth,
 	type OAuthCredentials,
 	type OAuthLoginCallbacks,
@@ -209,25 +210,57 @@ function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride
 	};
 }
 
+/** Classifier APIs from pi-ai's KnownClassifierApi. models.json entries with these apis are classifiers when type is omitted. */
+const KNOWN_CLASSIFIER_APIS = new Set<string>([
+	"typesafe-system-one",
+	"cloudflare-workers-ai-system-one",
+	"llama-cpp-classify",
+	"openai-decisions",
+]);
+
+function modelTypeFromJson(definition: ModelsJsonModel, api: string): ModelType {
+	if (definition.type) return definition.type;
+	return KNOWN_CLASSIFIER_APIS.has(api) ? "classifier" : "chat";
+}
+
 function modelFromJson(
 	providerId: string,
 	definition: ModelsJsonModel,
 	providerConfig: ModelsJsonProvider,
-	defaults: Model<Api> | undefined,
-): Model<Api> {
+	defaults: AnyModel | undefined,
+): AnyModel {
 	const api = definition.api ?? providerConfig.api ?? defaults?.api;
 	if (!api) {
 		throw new Error(
 			`Provider ${providerId}, model ${definition.id}: no "api" specified. Set at provider or model level.`,
 		);
 	}
+	const type = modelTypeFromJson(definition, api);
 	const baseUrl = definition.baseUrl ?? providerConfig.baseUrl ?? defaults?.baseUrl;
 	if (!baseUrl) throw new Error(`Provider ${providerId}: "baseUrl" is required when defining custom models.`);
 	if (definition.contextWindow !== undefined && definition.contextWindow <= 0) {
 		throw new Error(`Provider ${providerId}, model ${definition.id}: invalid contextWindow`);
 	}
-	if (definition.maxTokens !== undefined && definition.maxTokens <= 0) {
+	if (type === "chat" && definition.maxTokens !== undefined && definition.maxTokens <= 0) {
 		throw new Error(`Provider ${providerId}, model ${definition.id}: invalid maxTokens`);
+	}
+	const input = (definition.input ?? ["text"]) as ("text" | "image")[];
+	const cost = definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+	if (type === "classifier") {
+		return {
+			id: definition.id,
+			name: definition.name ?? definition.id,
+			type: "classifier",
+			api: api as ClassifierApi,
+			provider: providerId,
+			baseUrl,
+			input,
+			inputLimits: definition.inputLimits,
+			cost,
+			contextWindow: definition.contextWindow ?? 128000,
+			headers: undefined,
+			compat: mergeCompat(providerConfig.compat, definition.compat),
+		};
 	}
 	return {
 		id: definition.id,
@@ -237,9 +270,9 @@ function modelFromJson(
 		baseUrl,
 		reasoning: definition.reasoning ?? false,
 		thinkingLevelMap: definition.thinkingLevelMap,
-		input: (definition.input ?? ["text"]) as ("text" | "image")[],
+		input,
 		inputLimits: definition.inputLimits,
-		cost: definition.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		cost,
 		promptCache: definition.promptCache,
 		contextWindow: definition.contextWindow ?? 128000,
 		maxTokens: definition.maxTokens ?? 16384,
@@ -250,13 +283,18 @@ function modelFromJson(
 	};
 }
 
-function findModelDefaults(models: readonly AnyModel[], modelId: string, api?: Api): Model<Api> | undefined {
-	const chatModels = models.filter((model) => isModelType(model, "chat"));
+function findModelDefaults(
+	models: readonly AnyModel[],
+	modelId: string,
+	api: string | undefined,
+	type: ModelType,
+): AnyModel | undefined {
+	const candidates = models.filter((model) => isModelType(model, type));
 	return (
-		chatModels.find((model) => model.id === modelId) ??
-		(api ? chatModels.find((model) => model.api === api) : undefined) ??
-		chatModels.find((model) => model.api === "openai-completions") ??
-		chatModels[0]
+		candidates.find((model) => model.id === modelId) ??
+		(api ? candidates.find((model) => model.api === api) : undefined) ??
+		(type === "chat" ? candidates.find((model) => model.api === "openai-completions") : undefined) ??
+		candidates[0]
 	);
 }
 
@@ -334,8 +372,10 @@ function applyModelsJson(
 		return { ...model, baseUrl };
 	});
 	for (const definition of config.models ?? []) {
-		const existingIndex = models.findIndex((model) => isModelType(model, "chat") && model.id === definition.id);
-		const defaults = findModelDefaults(models, definition.id, definition.api ?? config.api);
+		const api = definition.api ?? config.api;
+		const type = modelTypeFromJson(definition, api ?? "");
+		const existingIndex = models.findIndex((model) => isModelType(model, type) && model.id === definition.id);
+		const defaults = findModelDefaults(models, definition.id, api, type);
 		const model = modelFromJson(providerId, definition, config, defaults);
 		if (existingIndex >= 0) models[existingIndex] = model;
 		else models.push(model);
