@@ -133,6 +133,22 @@ describe("Google thinking level maps", () => {
 		expect(() => resolveGoogleThinkingLevel(googleModel("gemini-3.7-flash", {}), "max")).toThrow(
 			"Unsupported Google thinking level mapping for test-google/gemini-3.7-flash: max -> undefined",
 		);
+		expect(() => resolveGoogleThinkingLevel(googleModel("gemini-3.7-flash", {}), "xhigh")).toThrow(
+			"Unsupported Google thinking level mapping for test-google/gemini-3.7-flash: xhigh -> undefined",
+		);
+
+		const hydrogenMap = {
+			low: "low",
+			medium: "medium",
+			high: "high",
+			xhigh: "xhigh",
+			max: null,
+		} as const;
+		const hydrogen = googleModel("gemini-4-hydrogen", hydrogenMap);
+		expect(resolveGoogleThinkingLevel(hydrogen, "xhigh")).toBe("xhigh");
+		expect(resolveGoogleThinkingLevel(googleModel("gemini-4-hydrogen", { ...hydrogenMap, xhigh: "XHIGH" }), "xhigh")).toBe(
+			"xhigh",
+		);
 	});
 
 	// Regression test for https://github.com/earendil-works/pi/issues/9455
@@ -209,4 +225,20 @@ describe("Google thinking level maps", () => {
 
 		expect(payload).toMatchObject({ config: { thinkingConfig: { thinkingBudget: 4321 } } });
 	});
+
+	// Regression test for https://github.com/earendil-works/pi/issues/12184
+	const hydrogenThinkingLevelMap = {
+		low: "low",
+		medium: "medium",
+		high: "high",
+		xhigh: "xhigh",
+		max: null,
+	} as const;
+
+	it.each(googleAdapters)("sends native XHIGH for Gemini 4 Hydrogen on $name", async ({ capture }) => {
+		const payload = await capture("gemini-4-hydrogen", hydrogenThinkingLevelMap, "xhigh");
+
+		expect(payload.config?.thinkingConfig).toEqual({ includeThoughts: true, thinkingLevel: "XHIGH" });
+	});
+
 });

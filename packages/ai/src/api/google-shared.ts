@@ -30,11 +30,13 @@ import { transformMessages } from "./transform-messages.ts";
 type GoogleApiType = "google-generative-ai" | "google-vertex";
 
 /**
- * Thinking level for Gemini 3 models.
- * Mirrors Google's ThinkingLevel enum values.
+ * Thinking level for Gemini 3/4 models.
+ * Mirrors Google's ThinkingLevel enum values, including XHIGH for Gemini 4 Hydrogen.
+ * @google/genai 2.32.0 (the current pin) has no ThinkingLevel.XHIGH; 3.3.0 added it.
+ * The generateContent wire value is still "XHIGH", so we send that string without bumping the SDK.
  */
-export type GoogleApiThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
-export type ResolvedGoogleThinkingLevel = Exclude<ThinkingLevel, "xhigh" | "max">;
+export type GoogleApiThinkingLevel = "THINKING_LEVEL_UNSPECIFIED" | "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | "XHIGH";
+export type ResolvedGoogleThinkingLevel = Exclude<ThinkingLevel, "max">;
 
 const GOOGLE_SDK_THINKING_LEVEL_MAP: Record<GoogleApiThinkingLevel, GoogleSdkThinkingLevel> = {
 	THINKING_LEVEL_UNSPECIFIED: GoogleSdkThinkingLevel.THINKING_LEVEL_UNSPECIFIED,
@@ -42,6 +44,8 @@ const GOOGLE_SDK_THINKING_LEVEL_MAP: Record<GoogleApiThinkingLevel, GoogleSdkThi
 	LOW: GoogleSdkThinkingLevel.LOW,
 	MEDIUM: GoogleSdkThinkingLevel.MEDIUM,
 	HIGH: GoogleSdkThinkingLevel.HIGH,
+	// Cast: the 2.32.0 enum has no XHIGH member, but the API accepts "XHIGH".
+	XHIGH: "XHIGH" as GoogleSdkThinkingLevel,
 };
 
 /** Resolve a supported pi level or model-specific Google mapping to a standard Google level. */
@@ -57,6 +61,13 @@ export function resolveGoogleThinkingLevel<T extends GoogleApiType>(
 		case "medium":
 		case "high":
 			return resolvedLevel;
+		case "xhigh":
+			// Native xhigh is only valid when the model map explicitly requests it
+			// (e.g. Gemini 4 Hydrogen). Unmapped or downward-mapped values stay as before.
+			if (typeof mapped === "string" && mapped.toLowerCase() === "xhigh") return "xhigh";
+			throw new Error(
+				`Unsupported Google thinking level mapping for ${model.provider}/${model.id}: ${level} -> ${String(mapped)}`,
+			);
 		default:
 			throw new Error(
 				`Unsupported Google thinking level mapping for ${model.provider}/${model.id}: ${level} -> ${String(mapped)}`,
@@ -94,6 +105,8 @@ export function toGoogleThinkingLevel(level: ResolvedGoogleThinkingLevel): Googl
 			return "MEDIUM";
 		case "high":
 			return "HIGH";
+		case "xhigh":
+			return "XHIGH";
 	}
 }
 
