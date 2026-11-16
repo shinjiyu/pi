@@ -48,6 +48,7 @@ import type {
 	Tool,
 	ToolResultMessage,
 } from "../types.ts";
+import { combineAbortSignals } from "../utils/abort-signals.ts";
 import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { normalizeProviderError } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
@@ -138,6 +139,102 @@ const THINKING_BINDING_CONTROLS_BETA = "thinking-binding-controls-2026-08-01";
 
 /** Matches the placeholder the Anthropic API path uses for redacted thinking. */
 const REDACTED_THINKING_PLACEHOLDER = "[Reasoning redacted]";
+
+function createStreamIdleTimeout(timeoutMs: number | undefined): {
+	signal?: AbortSignal;
+	arm: () => void;
+	dispose: () => void;
+	error: () => Error;
+	timedOut: () => boolean;
+} {
+	if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+		const error = () => new Error("Request was aborted");
+		return { arm() {}, dispose() {}, error, timedOut: () => false };
+	}
+
+	const controller = new AbortController();
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timedOut = false;
+	let timeoutError: Error | undefined;
+	const error = () => {
+		if (!timeoutError) {
+			// Match the Smithy HTTP/2 handler wording so the shared retry classifier
+			// treats this as a retryable timeout, without using HTTP/1 requestTimeout
+			// (a wall-clock deadline, not an idle timeout).
+			timeoutError = new Error(`Stream timed out because of no activity for ${timeoutMs} ms`);
+			timeoutError.name = "TimeoutError";
+		}
+		return timeoutError;
+	};
+	const arm = () => {
+		if (controller.signal.aborted) {
+			return;
+		}
+		if (timer !== undefined) {
+			clearTimeout(timer);
+		}
+		timer = setTimeout(() => {
+			timer = undefined;
+			timedOut = true;
+			if (!controller.signal.aborted) {
+				controller.abort(error());
+			}
+		}, timeoutMs);
+	};
+	const dispose = () => {
+		if (timer !== undefined) {
+			clearTimeout(timer);
+			timer = undefined;
+		}
+	};
+	return {
+		signal: controller.signal,
+		arm,
+		dispose,
+		error,
+		timedOut: () => timedOut,
+	};
+}
+
+function abortReasonError(
+	idleTimeout: { timedOut: () => boolean; error: () => Error },
+	userSignal?: AbortSignal,
+): Error {
+	if (userSignal?.aborted) {
+		return new Error("Request was aborted");
+	}
+	if (idleTimeout.timedOut()) {
+		return idleTimeout.error();
+	}
+	return new Error("Request was aborted");
+}
+
+function abortablePromise<T>(promise: Promise<T>, signal: AbortSignal | undefined, onAbort: () => Error): Promise<T> {
+	if (!signal) {
+		return promise;
+	}
+	if (signal.aborted) {
+		// send() is already in flight; observe it so a concurrent rejection is not unhandled.
+		void promise.then(undefined, () => {});
+		return Promise.reject(onAbort());
+	}
+	return new Promise<T>((resolve, reject) => {
+		const onAbortEvent = () => {
+			reject(onAbort());
+		};
+		signal.addEventListener("abort", onAbortEvent, { once: true });
+		promise.then(
+			(value) => {
+				signal.removeEventListener("abort", onAbortEvent);
+				resolve(value);
+			},
+			(error) => {
+				signal.removeEventListener("abort", onAbortEvent);
+				reject(signal.aborted ? onAbort() : error);
+			},
+		);
+	});
+}
 
 export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
 	model: Model<"bedrock-converse-stream">,
@@ -261,6 +358,8 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 		// Kept outside the try so the catch can still correlate a mid-stream failure:
 		// exceptions delivered as stream events carry no HTTP metadata of their own.
 		let responseRequestId: string | undefined;
+		const idleTimeout = createStreamIdleTimeout(options.timeoutMs);
+		const combinedAbort = combineAbortSignals([options.signal, idleTimeout.signal]);
 
 		try {
 			const supportsStrictMode = model.compat?.supportsStrictMode ?? false;
@@ -305,10 +404,21 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 					commandInput = nextCommandInput as typeof commandInput;
 				}
 				try {
-					response = await client.send(new ConverseStreamCommand(commandInput), { abortSignal: options.signal });
+					idleTimeout.arm();
+					response = await abortablePromise(
+						client.send(new ConverseStreamCommand(commandInput), {
+							abortSignal: combinedAbort.signal ?? options.signal,
+						}),
+						combinedAbort.signal,
+						() => abortReasonError(idleTimeout, options.signal),
+					);
+					idleTimeout.arm();
 					break;
 				} catch (error) {
 					// Bedrock checks the tool schemas before it starts the stream, so a retry never repeats streamed output.
+					if (idleTimeout.timedOut() && !options.signal?.aborted) {
+						throw idleTimeout.error();
+					}
 					if (
 						options.signal?.aborted ||
 						disablePreferredStrictTools ||
@@ -338,7 +448,20 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 				await options?.onResponse?.({ status: response.$metadata.httpStatusCode, headers: responseHeaders }, model);
 			}
 
-			for await (const item of response.stream!) {
+			const providerStream = response.stream;
+			if (!providerStream) {
+				throw new Error("Bedrock stream ended without a body");
+			}
+			const iterator = providerStream[Symbol.asyncIterator]();
+			for (;;) {
+				idleTimeout.arm();
+				const next = await abortablePromise(iterator.next(), combinedAbort.signal, () =>
+					abortReasonError(idleTimeout, options.signal),
+				);
+				if (next.done) {
+					break;
+				}
+				const item = next.value;
 				await options.onProviderStreamEvent?.(item, model);
 				if (item.messageStart) {
 					if (item.messageStart.role !== ConversationRole.ASSISTANT) {
@@ -397,6 +520,9 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
 			}
 			stream.push({ type: "error", reason: output.stopReason, error: output });
 			stream.end();
+		} finally {
+			idleTimeout.dispose();
+			combinedAbort.cleanup();
 		}
 	})();
 
