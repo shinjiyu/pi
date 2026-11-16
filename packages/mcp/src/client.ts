@@ -1,5 +1,6 @@
 import type { CallToolResult } from "./protocol/content.ts";
 import {
+	getByJsonRpcId,
 	isJsonRpcId,
 	isJsonRpcNotification,
 	isJsonRpcRequest,
@@ -479,14 +480,14 @@ export class McpClient {
 	}
 
 	private handleResponse(message: JsonRpcResponse): void {
-		const entry = this.pending.get(message.id);
-		if (!entry) {
+		const pending = getByJsonRpcId(this.pending, message.id);
+		if (!pending) {
 			this.emitError(new Error(`Received response for unknown MCP request ${String(message.id)}`));
 			return;
 		}
-		this.removePending(message.id, entry);
-		if ("error" in message) entry.reject(new McpError(message.error.code, message.error.message, message.error.data));
-		else entry.resolve(message.result);
+		this.removePending(pending.key, pending.value);
+		if ("error" in message) pending.value.reject(new McpError(message.error.code, message.error.message, message.error.data));
+		else pending.value.resolve(message.result);
 	}
 
 	private async handleRequest(message: JsonRpcRequest): Promise<void> {
@@ -535,8 +536,8 @@ export class McpClient {
 
 	private handleProgress(params: unknown): void {
 		if (!isObject(params) || !isJsonRpcId(params.progressToken) || typeof params.progress !== "number") return;
-		const requestId = this.progressRequests.get(params.progressToken);
-		const entry = requestId === undefined ? undefined : this.pending.get(requestId);
+		const requestId = getByJsonRpcId(this.progressRequests, params.progressToken)?.value;
+		const entry = requestId === undefined ? undefined : getByJsonRpcId(this.pending, requestId)?.value;
 		if (requestId === undefined || !entry) return;
 		this.armTimeout(requestId, entry);
 		try {
@@ -547,7 +548,7 @@ export class McpClient {
 	}
 
 	private handleCancelled(params: unknown): void {
-		if (isObject(params) && isJsonRpcId(params.requestId)) this.incoming.get(params.requestId)?.abort(params.reason);
+		if (isObject(params) && isJsonRpcId(params.requestId)) getByJsonRpcId(this.incoming, params.requestId)?.value.abort(params.reason);
 	}
 
 	private armTimeout(id: JsonRpcId, entry: PendingRequest): void {

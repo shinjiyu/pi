@@ -90,6 +90,23 @@ export function isJsonRpcId(value: unknown): value is JsonRpcId {
 	return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
 }
 
+/** True when two JSON-RPC ids name the same request, including a string form of a safe integer. */
+export function jsonRpcIdsEqual(a: JsonRpcId, b: JsonRpcId): boolean {
+	if (a === b) return true;
+	if (typeof a === "number" && typeof b === "string") return Number.isSafeInteger(a) && b === String(a);
+	if (typeof b === "number" && typeof a === "string") return Number.isSafeInteger(b) && a === String(b);
+	return false;
+}
+
+/** Look up a map entry by JSON-RPC id, accepting an equivalent string or numeric form. */
+export function getByJsonRpcId<T>(map: Map<JsonRpcId, T>, id: JsonRpcId): { key: JsonRpcId; value: T } | undefined {
+	if (map.has(id)) return { key: id, value: map.get(id) as T };
+	for (const [key, value] of map) {
+		if (jsonRpcIdsEqual(key, id)) return { key, value };
+	}
+	return undefined;
+}
+
 export function isJsonRpcRequest(message: unknown): message is JsonRpcRequest {
 	return (
 		isObject(message) && message.jsonrpc === "2.0" && isJsonRpcId(message.id) && typeof message.method === "string"

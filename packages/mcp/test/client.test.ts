@@ -63,6 +63,17 @@ async function connect(): Promise<{ client: McpClient; server: TestServer }> {
 	return { client, server };
 }
 
+/** Reply with the request id as a string, as some Streamable HTTP servers do (#12205). */
+function stringifyResponseIds(server: TestServer): void {
+	const original = server.transport.send.bind(server.transport);
+	server.transport.send = ((message: JsonRpcMessage, options?: { signal?: AbortSignal }) => {
+		if ("id" in message && typeof message.id === "number") {
+			message = { ...message, id: String(message.id) };
+		}
+		return original(message, options);
+	}) as InMemoryTransport["send"];
+}
+
 afterEach(() => {
 	vi.useRealTimers();
 });
@@ -335,5 +346,65 @@ describe("McpClient", () => {
 		});
 		expect(changed).toHaveBeenCalledWith(undefined);
 		await client.close();
+	});
+
+	it("matches a numeric request when the server echoes the id as a string", async () => {
+		const { clientTransport, server } = await createServer();
+		stringifyResponseIds(server);
+		const client = new McpClient({ name: "test-client", version: "1.0.0", requestTimeoutMs: 200 });
+		const errors: Error[] = [];
+		client.onError((error) => errors.push(error));
+		await client.connect(clientTransport);
+		server.setHandler("tools/list", () => ({ tools: [{ name: "ping", inputSchema: { type: "object" } }] }));
+		expect(await client.listTools()).toEqual([{ name: "ping", inputSchema: { type: "object" } }]);
+		expect(errors).toEqual([]);
+		await client.close();
+	});
+
+	it("matches a numeric progress token when the server sends it as a string", async () => {
+		vi.useFakeTimers();
+		const { clientTransport, server } = await createServer();
+		stringifyResponseIds(server);
+		const client = new McpClient({ name: "test-client", version: "1.0.0" });
+		await client.connect(clientTransport);
+		server.setHandler("tools/call", async (request) => {
+			const token = ((request.params as Record<string, unknown>)._meta as Record<string, unknown>)
+				.progressToken as number;
+			setTimeout(() => {
+				void server.transport.send({
+					jsonrpc: "2.0",
+					method: "notifications/progress",
+					params: { progressToken: String(token), progress: 1, total: 2 },
+				});
+			}, 40);
+			await new Promise((resolve) => setTimeout(resolve, 80));
+			return { content: [{ type: "text", text: "done" }] };
+		});
+		const progress = vi.fn();
+		const result = client.callTool("slow", {}, { timeoutMs: 50, onProgress: progress });
+		await vi.advanceTimersByTimeAsync(40);
+		await vi.advanceTimersByTimeAsync(40);
+		expect(await result).toEqual({ content: [{ type: "text", text: "done" }] });
+		expect(progress).toHaveBeenCalledWith({ progressToken: "2", progress: 1, total: 2 });
+		await client.close();
+	});
+
+	it("still times out when a string response id does not represent the pending request", async () => {
+		const { clientTransport, server } = await createServer();
+		const client = new McpClient({ name: "test-client", version: "1.0.0", requestTimeoutMs: 30 });
+		const errors: Error[] = [];
+		client.onError((error) => errors.push(error));
+		let initializeId: number | undefined;
+		const original = server.transport.send.bind(server.transport);
+		server.transport.send = ((message: JsonRpcMessage, options?: { signal?: AbortSignal }) => {
+			if ("id" in message && "result" in message && typeof message.id === "number") {
+				initializeId = message.id;
+				message = { ...message, id: "01" };
+			}
+			return original(message, options);
+		}) as InMemoryTransport["send"];
+		await expect(client.connect(clientTransport)).rejects.toBeInstanceOf(McpTimeoutError);
+		expect(initializeId).toBe(1);
+		expect(errors.some((error) => error.message.includes("unknown MCP request 01"))).toBe(true);
 	});
 });
