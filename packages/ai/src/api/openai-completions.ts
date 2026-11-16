@@ -1578,6 +1578,10 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 			return { stopReason: "error", errorMessage: "Provider finish_reason: content_filter" };
 		case "network_error":
 			return { stopReason: "error", errorMessage: "Provider finish_reason: network_error" };
+		case "error":
+			// Compatible providers (e.g. GitHub Copilot) report transient failures this way;
+			// "server error" makes the message retryable, matching the Mistral #10487 fix.
+			return { stopReason: "error", errorMessage: "Provider finish_reason: error (server error)" };
 		default:
 			return {
 				stopReason: "error",
