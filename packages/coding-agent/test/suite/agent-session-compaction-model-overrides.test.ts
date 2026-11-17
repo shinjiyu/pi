@@ -3,8 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionBeforeCompactEvent } from "../../src/core/extensions/index.ts";
 import { createHarness, type Harness } from "./harness.ts";
 
-function seedHistory(harness: Harness, totalTokens = 650): string {
-	const model = harness.session.model!;
+function seedHistory(harness: Harness, totalTokens = 650, model = harness.session.model!): string {
 	let recentUserId = "";
 	for (const label of ["old", "recent"]) {
 		recentUserId = harness.sessionManager.appendMessage({
@@ -172,4 +171,90 @@ describe("AgentSession compaction model overrides", () => {
 		await harness.session.compact();
 		expect(requests).toEqual(["first"]);
 	});
+
+	it.each(["manual", "pre-prompt", "post-run", "overflow"] as const)(
+		"uses the routed physical model's override when a virtual model is selected (%s)",
+		async (path) => {
+			const preparations: SessionBeforeCompactEvent[] = [];
+			const harness = await createHarness({
+				models: [{ id: "faux-1", contextWindow: 4000 }],
+				tools: [],
+				settings: {
+					compaction: {
+						enabled: path !== "manual",
+						reserveTokens: 10,
+						keepRecentTokens: 20000,
+						modelOverrides: { "faux/faux-1": { reserveTokens: 2000, keepRecentTokens: 150 } },
+					},
+				},
+				extensionFactories: [
+					(pi) => {
+						pi.registerVirtualModel({
+							provider: "router",
+							id: "auto",
+							name: "Auto",
+							route: (_request, ctx) => ({
+								model: ctx.modelRegistry.find("faux", "faux-1")!,
+								thinkingLevel: "off",
+							}),
+						});
+						pi.on("session_before_compact", (event) => {
+							preparations.push(event);
+							return {
+								compaction: {
+									summary: "compacted history",
+									firstKeptEntryId: event.preparation.firstKeptEntryId,
+									tokensBefore: event.preparation.tokensBefore,
+								},
+							};
+						});
+					},
+				],
+			});
+			harnesses.push(harness);
+			const physical = harness.getModel("faux-1")!;
+			await harness.session.setModel(harness.session.modelRuntime.getModel("router", "auto")!);
+			expect(harness.session.model).toMatchObject({ provider: "router", id: "auto" });
+			// Tag seeded responses with the physical model so _limitsModel() can resolve
+			// after a turn (routedModel reads the latest successful response).
+			const seedModel = path === "pre-prompt" ? harness.session.model! : physical;
+			const recentUserId = seedHistory(harness, path === "pre-prompt" ? 2500 : 650, seedModel);
+
+			if (path === "manual") {
+				await harness.session.compact();
+			} else {
+				harness.setResponses(
+					path === "overflow"
+						? [
+								fauxAssistantMessage("", { stopReason: "error", errorMessage: "prompt is too long" }),
+								fauxAssistantMessage("recovered"),
+							]
+						: [fauxAssistantMessage(path === "post-run" ? "z".repeat(8000) : "done")],
+				);
+				await harness.session.prompt("continue");
+			}
+
+			expect(preparations).toHaveLength(1);
+			expect(preparations[0]?.preparation.settings).toEqual({
+				enabled: path !== "manual",
+				reserveTokens: 2000,
+				keepRecentTokens: 150,
+			});
+			expect(preparations[0]?.reason).toBe(
+				path === "manual" ? "manual" : path === "overflow" ? "overflow" : "threshold",
+			);
+			if (path === "manual") {
+				expect(preparations[0]?.preparation.firstKeptEntryId).toBe(recentUserId);
+			}
+			expect(harness.eventsOfType("compaction_end")).toHaveLength(1);
+			expect(harness.eventsOfType("compaction_end")[0]).toMatchObject({
+				aborted: false,
+				willRetry: path === "overflow",
+				result: { summary: "compacted history" },
+			});
+			expect(harness.getPendingResponseCount()).toBe(0);
+			// Selection stays virtual; only settings and limits come from the routed model.
+			expect(harness.session.model).toMatchObject({ provider: "router", id: "auto" });
+		},
+	);
 });

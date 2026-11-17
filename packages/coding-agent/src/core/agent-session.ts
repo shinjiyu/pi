@@ -834,7 +834,7 @@ export class AgentSession {
 		return shouldCompact(
 			estimateProjectedContextTokens(projection, this.sessionManager.getBranch()).tokens,
 			model.contextWindow,
-			this.settingsManager.getCompactionSettings(this.model),
+			this.settingsManager.getCompactionSettings(model),
 		);
 	}
 
@@ -901,7 +901,7 @@ export class AgentSession {
 			// The route stands: the router already decided this request. The state entry does not change
 			// the projection.
 			if (this._exceedsCompactionThreshold(route.model, projection)) {
-				await this._runAutoCompaction("threshold", false);
+				await this._runAutoCompaction("threshold", false, route.model);
 				({ previous, context } = await prepare());
 			}
 			return { ...previous, context, model: route.model, thinkingLevel: route.thinkingLevel };
@@ -2948,7 +2948,7 @@ export class AgentSession {
 				throw new Error(formatNoModelSelectedMessage());
 			}
 
-			const settings = this.settingsManager.getCompactionSettings(model);
+			const settings = this.settingsManager.getCompactionSettings(this._limitsModel() ?? model);
 			const pathEntries = this.sessionManager.getBranch();
 
 			const preparation = prepareCompaction(pathEntries, settings);
@@ -3119,7 +3119,7 @@ export class AgentSession {
 	 * @returns Whether the post-run loop should call `agent.continue()` for overflow recovery or queued messages
 	 */
 	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
-		const settings = this.settingsManager.getCompactionSettings(this.model);
+		const settings = this.settingsManager.getCompactionSettings(this._limitsModel() ?? this.model);
 		if (!settings.enabled) return false;
 
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
@@ -3264,9 +3264,13 @@ export class AgentSession {
 	 * @param willRetry Whether to continue the interrupted turn after overflow compaction
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
-	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+	private async _runAutoCompaction(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		settingsModel?: Model<any>,
+	): Promise<boolean> {
 		const model = this.model;
-		const settings = this.settingsManager.getCompactionSettings(model);
+		const settings = this.settingsManager.getCompactionSettings(settingsModel ?? this._limitsModel() ?? model);
 		let abortController: AbortController | undefined;
 		let started = false;
 		let fromExtension = false;
