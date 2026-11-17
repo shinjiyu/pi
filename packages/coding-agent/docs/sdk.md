@@ -67,7 +67,7 @@ A prompt sent while the session is already streaming must specify whether it sho
 
 A steering message enters after the current assistant turn and its tool calls. A follow-up enters after the current run finishes its pending work. `steer()` and `followUp()` expose those behaviors directly and return `"queued"` if the input was queued (including after an extension transformed it), or `"handled"` if an extension consumed it.
 
-`abort()` stops the active operation and waits for the session to become idle. `waitForIdle()` waits without aborting it.
+`abort()` stops the active operation and waits for the session to become idle. Messages already in the steering or follow-up queues remain, so a host that wants to cancel them should call `clearQueue()` first. New messages are not accepted into those queues until `abort()` returns. `waitForIdle()` waits without aborting it.
 
 ## Subscribing to events
 

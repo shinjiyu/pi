@@ -419,6 +419,8 @@ export class AgentSession {
 	private _isAgentRunActive = false;
 	private _promptPreflightCount = 0;
 	private _agentRunAbortRequested = false;
+	/** Drop new steer/follow-up enqueue attempts while abort() is waiting for idle. */
+	private _ignoreNewQueuedMessages = false;
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
 
@@ -2240,6 +2242,10 @@ export class AgentSession {
 
 		// If streaming, queue via steer() or followUp() based on option
 		if (this.isStreaming) {
+			if (this._ignoreNewQueuedMessages) {
+				preflightResult?.("handled");
+				return undefined;
+			}
 			if (!options?.streamingBehavior) {
 				throw new Error(
 					"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
@@ -2354,6 +2360,7 @@ export class AgentSession {
 			this.isStreaming ? behavior : undefined,
 		);
 		if (!processedInput) return "handled";
+		if (this._ignoreNewQueuedMessages) return "handled";
 
 		let expandedText = this._expandSkillCommand(processedInput.text);
 		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
@@ -2403,6 +2410,7 @@ export class AgentSession {
 	 * Internal: Queue a steering message (already expanded, no extension command check).
 	 */
 	private async _queueSteer(text: string, images?: ImageContent[]): Promise<void> {
+		if (this._ignoreNewQueuedMessages) return;
 		this._steeringMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
@@ -2418,6 +2426,7 @@ export class AgentSession {
 	 * Internal: Queue a follow-up message (already expanded, no extension command check).
 	 */
 	private async _queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
+		if (this._ignoreNewQueuedMessages) return;
 		this._followUpMessages.push(text);
 		this._emitQueueUpdate();
 		const content: (TextContent | ImageContent)[] = [{ type: "text", text }];
@@ -2485,6 +2494,9 @@ export class AgentSession {
 			details: message.details,
 			timestamp: Date.now(),
 		} satisfies CustomMessage<T>;
+		if (this._ignoreNewQueuedMessages && (options?.deliverAs === "nextTurn" || options?.triggerTurn !== false)) {
+			return;
+		}
 		if (options?.deliverAs === "nextTurn") {
 			this._pendingNextTurnMessages.push(appMessage);
 		} else if (this.isStreaming && options?.triggerTurn !== false) {
@@ -2612,17 +2624,26 @@ export class AgentSession {
 
 	/**
 	 * Abort current operation and wait for agent to become idle.
+	 * Messages already in the steering or follow-up queues remain; call
+	 * {@link clearQueue} first to cancel them. New steer/follow-up messages
+	 * are ignored until this call returns, so an `agent_end` handler cannot
+	 * queue work that outlives the aborted run.
 	 */
 	async abort(): Promise<void> {
 		if (this._isAgentRunActive) {
 			this._agentRunAbortRequested = true;
+			this._ignoreNewQueuedMessages = true;
 		}
 		this.abortRetry();
 		this.abortCompaction();
 		this.abortBranchSummary();
 		if (this._isBeforeSettle) this._abortDuringBeforeSettle = true;
 		this.agent.abort();
-		await this.waitForIdle();
+		try {
+			await this.waitForIdle();
+		} finally {
+			this._ignoreNewQueuedMessages = false;
+		}
 	}
 
 	async waitForIdle(): Promise<void> {
