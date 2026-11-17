@@ -135,6 +135,49 @@ describe("SessionManager stale leaf across two instances", () => {
 			chmodSync(file, 0o644);
 		}
 	});
+
+	it("syncs getLeafId() to the file tip before a shutdown-style append", () => {
+		const { file, tip } = writeInitialSession();
+		const idle = SessionManager.open(file, tempDir);
+		const other = SessionManager.open(file, tempDir);
+		other.appendMessage(userMsg("zweite nachricht"));
+		other.appendMessage(assistantMsg("zweite antwort"));
+		const otherShutdown = other.appendCustomEntry("probe-shutdown", { from: "other" });
+
+		expect(idle.getLeafId()).toBe(tip);
+		idle.syncPersistedEntries();
+		// Handlers that snapshot getLeafId() during session_shutdown should already
+		// see the file tip, not the pre-sync load-time leaf.
+		expect(idle.getLeafId()).toBe(otherShutdown);
+
+		const idleShutdown = idle.appendCustomEntry("probe-shutdown", {
+			from: "idle",
+			leafAtShutdown: idle.getLeafId(),
+		});
+		const idleEntry = idle.getEntries().find((entry) => entry.id === idleShutdown);
+		expect(idleEntry?.parentId).toBe(otherShutdown);
+		expect((idleEntry as { data?: { leafAtShutdown?: string } } | undefined)?.data?.leafAtShutdown).toBe(
+			otherShutdown,
+		);
+	});
+
+	it("keeps a deliberately branched leaf when syncing before shutdown", () => {
+		const { file } = writeInitialSession();
+		const idle = SessionManager.open(file, tempDir);
+		const firstUserId = idle.getEntries()[0].id;
+		idle.branch(firstUserId);
+
+		const other = SessionManager.open(file, tempDir);
+		other.appendMessage(userMsg("zweite nachricht"));
+		other.appendMessage(assistantMsg("zweite antwort"));
+
+		idle.syncPersistedEntries();
+		expect(idle.getLeafId()).toBe(firstUserId);
+
+		const forked = idle.appendCustomEntry("probe-shutdown", { from: "idle-branch" });
+		const forkedEntry = idle.getEntries().find((entry) => entry.id === forked);
+		expect(forkedEntry?.parentId).toBe(firstUserId);
+	});
 });
 
 describe("readCompleteEntriesFromFile", () => {

@@ -261,11 +261,17 @@ export type ShutdownHandler = () => void;
 /**
  * Helper function to emit session_shutdown event to extensions.
  * Returns true if the event was emitted, false if there were no handlers.
+ *
+ * When a session manager is provided, it is synced first so handlers that
+ * call getLeafId() see the current file tip (or a deliberately selected branch)
+ * rather than a stale load-time leaf.
  */
 export async function emitSessionShutdownEvent(
 	extensionRunner: ExtensionRunner,
 	event: SessionShutdownEvent,
+	sessionManager?: { syncPersistedEntries(): void },
 ): Promise<boolean> {
+	sessionManager?.syncPersistedEntries();
 	if (extensionRunner.hasHandlers("session_shutdown")) {
 		await extensionRunner.emit(event);
 		return true;

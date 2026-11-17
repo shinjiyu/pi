@@ -3838,7 +3838,7 @@ export class AgentSession {
 
 		const oldRunner = this._extensionRunner;
 		const previousFlagValues = oldRunner.getFlagValues();
-		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
+		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" }, this.sessionManager);
 		oldRunner.invalidate();
 		const getDefaultTools = () =>
 			this._usesDefaultTools

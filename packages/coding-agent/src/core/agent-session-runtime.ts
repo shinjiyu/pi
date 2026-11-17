@@ -187,11 +187,15 @@ export class AgentSessionRuntime {
 		// Settle any active response first so the aborted turn (including tool
 		// results) is persisted to the outgoing session before it is replaced.
 		await this.session.abort();
-		await emitSessionShutdownEvent(this.session.extensionRunner, {
-			type: "session_shutdown",
-			reason,
-			targetSessionFile,
-		});
+		await emitSessionShutdownEvent(
+			this.session.extensionRunner,
+			{
+				type: "session_shutdown",
+				reason,
+				targetSessionFile,
+			},
+			this.session.sessionManager,
+		);
 		this.beforeSessionInvalidate?.();
 		this.session.dispose();
 	}
@@ -433,10 +437,14 @@ export class AgentSessionRuntime {
 	 */
 	async dispose(): Promise<void> {
 		await this.session.abort();
-		await emitSessionShutdownEvent(this.session.extensionRunner, {
-			type: "session_shutdown",
-			reason: "quit",
-		});
+		await emitSessionShutdownEvent(
+			this.session.extensionRunner,
+			{
+				type: "session_shutdown",
+				reason: "quit",
+			},
+			this.session.sessionManager,
+		);
 		this.beforeSessionInvalidate?.();
 		this.session.dispose();
 		await this.services.modelRuntime.settleCredentialWrites();

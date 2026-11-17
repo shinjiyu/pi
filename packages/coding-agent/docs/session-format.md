@@ -2,7 +2,7 @@
 
 Sessions are stored as JSONL (JSON Lines) files. Each line is a JSON object with a `type` field. Session entries form a tree structure via `id`/`parentId` fields, enabling in-place branching without creating new files.
 
-Opening the same session file in more than one process is not supported for concurrent interactive use. An idle instance will attach later appends to the current file tip so it does not silently fork an empty resume branch, but the two conversations still interleave on one branch.
+Opening the same session file in more than one process is not supported for concurrent interactive use. An idle instance will attach later appends to the current file tip so it does not silently fork an empty resume branch, but the two conversations still interleave on one branch. Before `session_shutdown` handlers run, the session manager syncs the same way, so `getLeafId()` in those handlers already reflects the file tip (or a deliberately selected branch).
 
 For programmatic creation, persistence, and tree navigation, see the [`SessionManager` API](sdk.md#sessionmanager-api).
 

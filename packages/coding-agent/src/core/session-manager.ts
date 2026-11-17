@@ -1340,6 +1340,15 @@ export class SessionManager {
 		}
 	}
 
+	/**
+	 * Ingest new entries from the session file. If the local leaf is still the
+	 * last known file tip, follow the new tip. Leaves moved by branch() or
+	 * resetLeaf() stay where they are.
+	 */
+	syncPersistedEntries(): void {
+		this._syncPersistedEntries();
+	}
+
 	private _appendEntry(entry: SessionEntry): void {
 		const previousLeafId = this.leafId;
 		this.fileEntries.push(entry);
