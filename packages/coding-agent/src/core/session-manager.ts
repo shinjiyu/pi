@@ -671,6 +671,49 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
 }
 
 /**
+ * Read complete JSONL session entries starting at a byte offset.
+ * Trailing bytes without a newline are left unread for a later call.
+ * Unlike loadEntriesFromFile(), this never writes a repair newline.
+ */
+export function readCompleteEntriesFromFile(
+	filePath: string,
+	startOffset = 0,
+): { entries: FileEntry[]; endOffset: number } {
+	const resolvedFilePath = normalizePath(filePath);
+	if (!existsSync(resolvedFilePath) || startOffset < 0) {
+		return { entries: [], endOffset: Math.max(0, startOffset) };
+	}
+
+	const entries: FileEntry[] = [];
+	let endOffset = startOffset;
+	const fd = openSync(resolvedFilePath, "r");
+	try {
+		const chunks: Buffer[] = [];
+		const buffer = Buffer.allocUnsafe(SESSION_READ_BUFFER_SIZE);
+		let position = startOffset;
+		while (true) {
+			const bytesRead = readSync(fd, buffer, 0, buffer.length, position);
+			if (bytesRead === 0) break;
+			chunks.push(Buffer.from(buffer.subarray(0, bytesRead)));
+			position += bytesRead;
+		}
+		const data = chunks.length === 0 ? Buffer.alloc(0) : chunks.length === 1 ? chunks[0]! : Buffer.concat(chunks);
+		let lineStart = 0;
+		for (let i = 0; i < data.length; i++) {
+			if (data[i] === 0x0a) {
+				const entry = parseSessionEntryLine(data.subarray(lineStart, i).toString("utf8"));
+				if (entry) entries.push(entry);
+				lineStart = i + 1;
+			}
+		}
+		endOffset = startOffset + lineStart;
+	} finally {
+		closeSync(fd);
+	}
+	return { entries, endOffset };
+}
+
+/**
  * Inspect a physical line while searching for the first parsed session entry.
  * Blank and malformed lines are skipped to match loadEntriesFromFile().
  * Returns undefined to keep scanning, null for a parsed non-header entry, or the header.
@@ -1085,6 +1128,7 @@ export class SessionManager {
 		this.labelTimestampsById.clear();
 		this.leafId = null;
 		this.flushed = false;
+		this.persistedFileSize = 0;
 
 		if (this.persist) {
 			const fileTimestamp = timestamp.replace(/[:.]/g, "-");
@@ -1221,6 +1265,23 @@ export class SessionManager {
 	 * Ingest entries another process appended to the session file.
 	 * Returns the file tip we knew before ingesting, and whether new entries were added.
 	 */
+	private _adoptPersistedEntry(entry: FileEntry): boolean {
+		if (entry.type === "session") return false;
+		if (this.byId.has(entry.id)) return false;
+		this.fileEntries.push(entry);
+		this.byId.set(entry.id, entry);
+		if (entry.type === "label") {
+			if (entry.label) {
+				this.labelsById.set(entry.targetId, entry.label);
+				this.labelTimestampsById.set(entry.targetId, entry.timestamp);
+			} else {
+				this.labelsById.delete(entry.targetId);
+				this.labelTimestampsById.delete(entry.targetId);
+			}
+		}
+		return true;
+	}
+
 	private _ingestNewPersistedEntries(): { previousTip: string | null; added: boolean } {
 		const previousTip = this._lastPersistedEntryId();
 		if (!this.persist || !this.sessionFile || !this.flushed) {
@@ -1234,25 +1295,35 @@ export class SessionManager {
 			return { previousTip, added: false };
 		}
 
-		const diskEntries = loadEntriesFromFile(this.sessionFile);
+		// Size went down: another process rewrote or truncated the file. Reload
+		// from byte 0. Size went up: parse only the new tail. Never use
+		// loadEntriesFromFile() here; its trailing-newline repair can splice a
+		// newline into another process's in-flight line.
+		const startOffset = size < this.persistedFileSize ? 0 : this.persistedFileSize;
+		const { entries: diskEntries, endOffset } = readCompleteEntriesFromFile(this.sessionFile, startOffset);
+
+		if (startOffset === 0) {
+			const header = diskEntries[0];
+			if (!header || header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
+				this.persistedFileSize = endOffset;
+				return { previousTip, added: false };
+			}
+			const previousLeaf = this.leafId;
+			this.fileEntries = diskEntries;
+			this.sessionId = header.id;
+			this._buildIndex();
+			if (previousLeaf !== previousTip && previousLeaf && this.byId.has(previousLeaf)) {
+				this.leafId = previousLeaf;
+			}
+			this.persistedFileSize = endOffset;
+			return { previousTip, added: this._lastPersistedEntryId() !== previousTip };
+		}
+
 		let added = 0;
 		for (const entry of diskEntries) {
-			if (entry.type === "session") continue;
-			if (this.byId.has(entry.id)) continue;
-			this.fileEntries.push(entry);
-			this.byId.set(entry.id, entry);
-			if (entry.type === "label") {
-				if (entry.label) {
-					this.labelsById.set(entry.targetId, entry.label);
-					this.labelTimestampsById.set(entry.targetId, entry.timestamp);
-				} else {
-					this.labelsById.delete(entry.targetId);
-					this.labelTimestampsById.delete(entry.targetId);
-				}
-			}
-			added++;
+			if (this._adoptPersistedEntry(entry)) added++;
 		}
-		this.persistedFileSize = size;
+		this.persistedFileSize = endOffset;
 		return { previousTip, added: added > 0 };
 	}
 
