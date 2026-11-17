@@ -113,17 +113,26 @@ function tokenCount(value: unknown): number {
 /**
  * Usage from a `{ input_tokens, output_tokens }` object, priced from the model catalog like chat
  * usage. A missing or malformed usage object leaves the result without usage instead of failing it.
+ *
+ * OpenAI Decisions includes cache-read and cache-write counts in `input_tokens` and reports them
+ * under `input_tokens_details`. Subtract both so uncached input is not double-counted. Providers
+ * that omit the details keep the previous behavior (all input tokens are uncached).
  */
 export function parseClassifierUsage(value: unknown, model: ClassifierModel<ClassifierApi>): Usage | undefined {
 	if (!isRecord(value) || (value.input_tokens === undefined && value.output_tokens === undefined)) return undefined;
-	const input = tokenCount(value.input_tokens);
+	const inputTokens = tokenCount(value.input_tokens);
 	const output = tokenCount(value.output_tokens);
+	const details = isRecord(value.input_tokens_details) ? value.input_tokens_details : undefined;
+	const cacheRead = tokenCount(details?.cached_tokens);
+	const cacheWrite = tokenCount(details?.cache_write_tokens);
+	// OpenAI includes cached and cache-write tokens in input_tokens, so subtract both.
+	const input = Math.max(0, inputTokens - cacheRead - cacheWrite);
 	const usage: Usage = {
 		input,
 		output,
-		cacheRead: 0,
-		cacheWrite: 0,
-		totalTokens: input + output,
+		cacheRead,
+		cacheWrite,
+		totalTokens: input + output + cacheRead + cacheWrite,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 	calculateCost(model, usage);

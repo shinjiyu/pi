@@ -13,9 +13,9 @@ const model: ClassifierModel<"openai-decisions"> = {
 	cost: {
 		input: 0.1,
 		output: 0,
-		cacheRead: 0,
-		cacheWrite: 0,
-		tiers: [{ inputTokensAbove: 272000, input: 0.2, output: 0, cacheRead: 0, cacheWrite: 0 }],
+		cacheRead: 0.01,
+		cacheWrite: 0.125,
+		tiers: [{ inputTokensAbove: 272000, input: 0.2, output: 0, cacheRead: 0.02, cacheWrite: 0.25 }],
 	},
 	contextWindow: 922000,
 };
@@ -136,6 +136,61 @@ describe("OpenAI Decisions", () => {
 		});
 
 		expect(result.usage?.cost.total).toBeCloseTo(0.06, 12);
+	});
+
+	it("preserves Decisions cache-read and cache-write counts without double-counting input", async () => {
+		// OpenAI includes both cache counts in input_tokens.
+		const result = await classify(model, context, {
+			apiKey: "secret",
+			fetch: async () =>
+				Response.json({
+					answers: wireAnswers,
+					usage: {
+						input_tokens: 2000,
+						output_tokens: 0,
+						input_tokens_details: { cached_tokens: 1600, cache_write_tokens: 100 },
+					},
+				}),
+		});
+
+		expect(result.stopReason).toBe("stop");
+		expect(result.usage).toMatchObject({
+			input: 300,
+			output: 0,
+			cacheRead: 1600,
+			cacheWrite: 100,
+			totalTokens: 2000,
+		});
+		// 300 * 0.1 + 1600 * 0.01 + 100 * 0.125, per million tokens.
+		expect(result.usage?.cost.input).toBeCloseTo(0.00003, 12);
+		expect(result.usage?.cost.cacheRead).toBeCloseTo(0.000016, 12);
+		expect(result.usage?.cost.cacheWrite).toBeCloseTo(0.0000125, 12);
+		expect(result.usage?.cost.total).toBeCloseTo(0.0000585, 12);
+	});
+
+	it("prices cached long-context Decisions usage at the doubled cache rates", async () => {
+		const result = await classify(model, context, {
+			apiKey: "secret",
+			fetch: async () =>
+				Response.json({
+					answers: wireAnswers,
+					usage: {
+						input_tokens: 300000,
+						output_tokens: 0,
+						input_tokens_details: { cached_tokens: 200000, cache_write_tokens: 20000 },
+					},
+				}),
+		});
+
+		expect(result.usage).toMatchObject({
+			input: 80000,
+			output: 0,
+			cacheRead: 200000,
+			cacheWrite: 20000,
+			totalTokens: 300000,
+		});
+		// Long-context rates: input 0.2, cacheRead 0.02, cacheWrite 0.25 per million.
+		expect(result.usage?.cost.total).toBeCloseTo(0.025, 12);
 	});
 
 	it("sends images after the state in one user message", async () => {

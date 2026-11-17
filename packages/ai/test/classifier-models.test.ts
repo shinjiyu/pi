@@ -202,6 +202,14 @@ describe("Models with classifier models", () => {
 		const luna = models.getModelOfType("classifier", "openai", "gpt-6-luna");
 		if (!luna) throw new Error("missing OpenAI Decisions model");
 		expect(luna).toMatchObject({ api: "openai-decisions", input: ["text", "image"], contextWindow: 922000 });
+		expect(luna.cost).toMatchObject({ input: 0.1, output: 0, cacheRead: 0.01, cacheWrite: 0.125 });
+		expect(luna.cost.tiers?.[0]).toMatchObject({
+			inputTokensAbove: 272000,
+			input: 0.2,
+			output: 0,
+			cacheRead: 0.02,
+			cacheWrite: 0.25,
+		});
 		// The chat entry with the same id stays separate.
 		expect(models.getModel("openai", "gpt-6-luna")?.api).toBe("openai-responses");
 
