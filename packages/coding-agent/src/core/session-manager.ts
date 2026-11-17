@@ -1004,6 +1004,7 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	private persistedFileSize = 0;
 
 	private constructor(
 		cwd: string,
@@ -1050,11 +1051,13 @@ export class SessionManager {
 				this.sessionFile = explicitPath;
 				this._rewriteFile();
 				this.flushed = true;
+				this._rememberPersistedFileSize();
 				return;
 			}
 
 			this._loadEntries(entries);
 			this.flushed = true;
+			this._rememberPersistedFileSize();
 		} else {
 			const explicitPath = this.sessionFile;
 			this.newSession();
@@ -1139,6 +1142,7 @@ export class SessionManager {
 		} finally {
 			closeSync(fd);
 		}
+		this._rememberPersistedFileSize();
 	}
 
 	isPersisted(): boolean {
@@ -1194,6 +1198,75 @@ export class SessionManager {
 		} else {
 			appendFileSync(this.sessionFile, `${JSON.stringify(entry)}\n`);
 		}
+		this._rememberPersistedFileSize();
+	}
+
+	private _rememberPersistedFileSize(): void {
+		if (!this.persist || !this.sessionFile || !existsSync(this.sessionFile)) {
+			this.persistedFileSize = 0;
+			return;
+		}
+		this.persistedFileSize = statSync(this.sessionFile).size;
+	}
+
+	private _lastPersistedEntryId(): string | null {
+		for (let i = this.fileEntries.length - 1; i >= 0; i--) {
+			const entry = this.fileEntries[i];
+			if (entry.type !== "session") return entry.id;
+		}
+		return null;
+	}
+
+	/**
+	 * Ingest entries another process appended to the session file.
+	 * Returns the file tip we knew before ingesting, and whether new entries were added.
+	 */
+	private _ingestNewPersistedEntries(): { previousTip: string | null; added: boolean } {
+		const previousTip = this._lastPersistedEntryId();
+		if (!this.persist || !this.sessionFile || !this.flushed) {
+			return { previousTip, added: false };
+		}
+		if (!existsSync(this.sessionFile)) {
+			return { previousTip, added: false };
+		}
+		const size = statSync(this.sessionFile).size;
+		if (size === this.persistedFileSize) {
+			return { previousTip, added: false };
+		}
+
+		const diskEntries = loadEntriesFromFile(this.sessionFile);
+		let added = 0;
+		for (const entry of diskEntries) {
+			if (entry.type === "session") continue;
+			if (this.byId.has(entry.id)) continue;
+			this.fileEntries.push(entry);
+			this.byId.set(entry.id, entry);
+			if (entry.type === "label") {
+				if (entry.label) {
+					this.labelsById.set(entry.targetId, entry.label);
+					this.labelTimestampsById.set(entry.targetId, entry.timestamp);
+				} else {
+					this.labelsById.delete(entry.targetId);
+					this.labelTimestampsById.delete(entry.targetId);
+				}
+			}
+			added++;
+		}
+		this.persistedFileSize = size;
+		return { previousTip, added: added > 0 };
+	}
+
+	/**
+	 * If our leaf is still the tip we last knew about, follow the file's new tip
+	 * so the next append does not fork an orphan branch. Leaves moved by branch()
+	 * or resetLeaf() stay where they are.
+	 */
+	private _syncPersistedEntries(): void {
+		const { previousTip, added } = this._ingestNewPersistedEntries();
+		if (!added) return;
+		if (this.leafId === previousTip) {
+			this.leafId = this._lastPersistedEntryId();
+		}
 	}
 
 	private _appendEntry(entry: SessionEntry): void {
@@ -1220,6 +1293,7 @@ export class SessionManager {
 	 * These need to be appended via appendCompaction() and appendBranchSummary() methods.
 	 */
 	appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+		this._syncPersistedEntries();
 		const entry: SessionMessageEntry = {
 			type: "message",
 			id: generateId(this.byId),
@@ -1233,6 +1307,7 @@ export class SessionManager {
 
 	/** Append a thinking level change as child of current leaf, then advance leaf. Returns entry id. */
 	appendThinkingLevelChange(thinkingLevel: string): string {
+		this._syncPersistedEntries();
 		const entry: ThinkingLevelChangeEntry = {
 			type: "thinking_level_change",
 			id: generateId(this.byId),
@@ -1246,6 +1321,7 @@ export class SessionManager {
 
 	/** Append a model change as child of current leaf, then advance leaf. Returns entry id. */
 	appendModelChange(provider: string, modelId: string): string {
+		this._syncPersistedEntries();
 		const entry: ModelChangeEntry = {
 			type: "model_change",
 			id: generateId(this.byId),
@@ -1260,6 +1336,7 @@ export class SessionManager {
 
 	/** Append model-attributed usage that does not participate in LLM context. Returns the appended entry. */
 	appendUsage(kind: string, provider: string, model: string, usage: Usage, note?: string): UsageEntry {
+		this._syncPersistedEntries();
 		const entry: UsageEntry = {
 			type: "usage",
 			id: generateId(this.byId),
@@ -1284,6 +1361,7 @@ export class SessionManager {
 		fromHook?: boolean,
 		usage?: Usage,
 	): string {
+		this._syncPersistedEntries();
 		const timestamp = new Date().toISOString();
 		const systemMessage = getCurrentSystemMessage(this.buildSessionProjection().messages);
 		const id = generateId(this.byId);
@@ -1306,6 +1384,7 @@ export class SessionManager {
 
 	/** Append a custom entry (for extensions) as child of current leaf, then advance leaf. Returns entry id. */
 	appendCustomEntry(customType: string, data?: unknown): string {
+		this._syncPersistedEntries();
 		const entry: CustomEntry = {
 			type: "custom",
 			customType,
@@ -1320,6 +1399,7 @@ export class SessionManager {
 
 	/** Append a session info entry (e.g., display name). Returns entry id. */
 	appendSessionInfo(name: string): string {
+		this._syncPersistedEntries();
 		const sanitizedName = name.replace(/[\r\n]+/g, " ").trim();
 		const entry: SessionInfoEntry = {
 			type: "session_info",
@@ -1360,6 +1440,7 @@ export class SessionManager {
 		display: boolean,
 		details?: T,
 	): string {
+		this._syncPersistedEntries();
 		const entry: CustomMessageEntry<T> = {
 			type: "custom_message",
 			customType,
@@ -1376,6 +1457,7 @@ export class SessionManager {
 
 	/** Append a branch-local edit to an earlier model-visible entry. */
 	appendContextEdit(targetId: string, replacement: ContextEditEntry["replacement"]): string {
+		this._syncPersistedEntries();
 		if (
 			replacement !== null &&
 			(typeof replacement !== "object" ||
@@ -1457,6 +1539,7 @@ export class SessionManager {
 	 * Pass undefined or empty string to clear the label.
 	 */
 	appendLabelChange(targetId: string, label: string | undefined): string {
+		this._syncPersistedEntries();
 		if (!this.byId.has(targetId)) {
 			throw new Error(`Entry ${targetId} not found`);
 		}
@@ -1622,6 +1705,7 @@ export class SessionManager {
 		fromHook?: boolean,
 		usage?: Usage,
 	): string {
+		this._ingestNewPersistedEntries();
 		if (branchFromId !== null && !this.byId.has(branchFromId)) {
 			throw new Error(`Entry ${branchFromId} not found`);
 		}
