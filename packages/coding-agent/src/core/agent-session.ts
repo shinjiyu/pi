@@ -1908,11 +1908,34 @@ export class AgentSession {
 	private _restoreToolsFromTranscript(modifiers: readonly string[] = []): void {
 		this._pendingToolNames.clear();
 		this._restoredToolNames.clear();
-		// All system messages on the branch, including those before a compaction. Compaction snapshots
-		// are derived from these, so replaying them gives the current loadout.
-		const systemMessages = this.sessionManager
-			.getBranch()
-			.flatMap((entry) => (entry.type === "message" && entry.message.role === "system" ? [entry.message] : []));
+		const branch = this.sessionManager.getBranch();
+		// A missing parent means the branch was cut (orphan parentId after a skipped malformed line,
+		// or a hole older than the write-rollback fix). Remaining system messages are not a complete
+		// loadout: they may be later patches, and the initial declaration is gone.
+		const truncated = branch.length > 0 && branch[0].parentId != null;
+		let snapshotIndex = -1;
+		if (truncated) {
+			for (let i = branch.length - 1; i >= 0; i--) {
+				const entry = branch[i];
+				if (entry.type === "compaction" && entry.systemMessage) {
+					snapshotIndex = i;
+					break;
+				}
+			}
+		}
+		const systemMessages =
+			snapshotIndex >= 0
+				? [
+						(branch[snapshotIndex] as CompactionEntry).systemMessage!,
+						...branch
+							.slice(snapshotIndex + 1)
+							.flatMap((entry) =>
+								entry.type === "message" && entry.message.role === "system" ? [entry.message] : [],
+							),
+					]
+				: branch.flatMap((entry) =>
+						entry.type === "message" && entry.message.role === "system" ? [entry.message] : [],
+					);
 		// No recorded loadout: keep the current tools.
 		if (systemMessages.length === 0) return;
 		// Tools the branch ever added or removed. Removed tools stay inactive.
@@ -1927,20 +1950,24 @@ export class AgentSession {
 			(name) =>
 				!mentioned.has(name) && !this._baseToolDefinitions.has(name) && this._isActivatedOnRegistration(name),
 		);
+		let recorded = getCurrentTools(systemMessages).map((tool) => tool.name);
+		// Without a compaction snapshot, the remaining messages are only patches. Seed built-ins from
+		// defaultTools, then apply those patches, so a later system message cannot drop every built-in.
+		if (truncated && snapshotIndex < 0) {
+			const defaults =
+				this._initialActiveToolNames ??
+				(this._baseToolsOverride ? Object.keys(this._baseToolsOverride) : [...DEFAULT_TOOL_NAMES]);
+			const removed = new Set(
+				systemMessages.flatMap((message) => (message.toolsRemoved ?? []).map((tool) => tool.name)),
+			);
+			recorded = [...new Set([...defaults.filter((name) => !removed.has(name)), ...recorded])];
+		}
 		// The recorded loadout plus the new tools, with `--tools +name`/`-name` applied.
-		const names = applyToolModifiers(
-			[...getCurrentTools(systemMessages).map((tool) => tool.name), ...newTools],
-			modifiers,
-		);
+		const names = applyToolModifiers([...recorded, ...newTools], modifiers);
 		// Recorded tools that are not registered yet, such as MCP tools of servers still connecting, are
 		// activated when they register. Excluded tools never register, so they are not kept pending.
 		this._pendingToolNames = new Set(names.filter((name) => this._isAllowedTool(name)));
-		this._restoredToolNames = new Set(
-			applyToolModifiers(
-				getCurrentTools(systemMessages).map((tool) => tool.name),
-				modifiers,
-			),
-		);
+		this._restoredToolNames = new Set(applyToolModifiers(recorded, modifiers));
 		// Ignores names that are not registered.
 		this._setActiveTools(names);
 	}
