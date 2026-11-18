@@ -59,7 +59,7 @@ import {
 	resolveTranscript,
 	type TranscriptContext,
 } from "../utils/transcript.ts";
-
+import { anthropicContextTokens } from "./anthropic-usage.ts";
 import {
 	getJsonSchemaToolParameters,
 	prefersJsonSchemaStrictSampling,
@@ -970,9 +970,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					output.usage.cacheRead = event.message.usage.cache_read_input_tokens || 0;
 					output.usage.cacheWrite = event.message.usage.cache_creation_input_tokens || 0;
 					output.usage.cacheWrite1h = event.message.usage.cache_creation?.ephemeral_1h_input_tokens || 0;
-					// Anthropic doesn't provide total_tokens, compute from components
-					output.usage.totalTokens =
-						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+					// Anthropic doesn't provide total_tokens. After a server-tool loop the
+					// top-level fields are billed sums; context size comes from the last message iteration.
+					output.usage.totalTokens = anthropicContextTokens(event.message.usage, output.usage);
 					calculateCost(usageModel, output.usage);
 				} else if (event.type === "content_block_start") {
 					if (event.content_block.type === "fallback") {
@@ -1123,9 +1123,9 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 							output.usage.reasoning = thinkingTokens;
 						}
 					}
-					// Anthropic doesn't provide total_tokens, compute from components
-					output.usage.totalTokens =
-						output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+					// Anthropic doesn't provide total_tokens. After a server-tool loop the
+					// top-level fields are billed sums; context size comes from the last message iteration.
+					output.usage.totalTokens = anthropicContextTokens(event.usage, output.usage);
 					calculateCost(usageModel, output.usage);
 					if (isOpenRouterModel(model) && event.usage) {
 						// OpenRouter adds billing fields to streamed message_delta usage at runtime,
