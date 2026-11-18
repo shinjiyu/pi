@@ -161,6 +161,15 @@ describe("provider retry classification", () => {
 		).toBe(true);
 	});
 
+	it.each([
+		// Regression for #10278.
+		"Selected model is at capacity",
+		// Regression for #12289: xAI inserts "currently" into the same phrase.
+		"The model is currently at capacity due to high demand.",
+	])("matches model-at-capacity wording: %s", (errorMessage) => {
+		expect(isRetryableAssistantError(fauxAssistantMessage("", { stopReason: "error", errorMessage }))).toBe(true);
+	});
+
 	it("keeps provider limit errors non-retryable", () => {
 		expect(
 			isRetryableAssistantError(

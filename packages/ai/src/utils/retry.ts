@@ -40,7 +40,8 @@ const RETRYABLE_PROVIDER_ERROR_PATTERN = buildProviderErrorPattern([
 	"server_busy",
 	"servers are currently busy",
 	"currently experiencing high demand",
-	"model is at capacity",
+	// #10278 "model is at capacity"; #12289 xAI inserts "currently".
+	"model is (?:currently )?at capacity",
 	"rate.?limit",
 	"too many requests",
 	// Status codes must not be part of a longer word or number, e.g. a request id or byte count (#11057).
