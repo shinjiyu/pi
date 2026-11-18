@@ -112,7 +112,12 @@ export default defineProvider({
 			[GPT_6_LUNA],
 		).map((model) => (EXTENDED_CONTEXT_MODEL_IDS.has(model.id) ? { ...model, contextWindow: 1000000 } : model)),
 	classifiers: () => [MICROSOFT_DECISION_1],
-	compat: { "openai-completions": { supportsStrictMode: true } },
+	// Copilot /responses treats a missing `strict` field like strict schema decoding
+	// and fills optional tool arguments; sending `strict: false` matches Completions (#12286).
+	compat: {
+		"openai-completions": { supportsStrictMode: true },
+		"openai-responses": { supportsStrictMode: true },
+	},
 	finalize: (model) => {
 		if (model.id.startsWith("gpt-5")) mergeThinking(model, { minimal: "low" });
 		const override = THINKING_LEVEL_OVERRIDES[model.id];

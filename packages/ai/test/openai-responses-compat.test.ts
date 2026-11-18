@@ -10,6 +10,12 @@ interface CapturedResponsesPayload {
 	prompt_cache_key?: string;
 	session_id?: string;
 	tools?: Array<{ name?: string; strict?: boolean }>;
+	input?: Array<{ type?: string; tools?: Array<{ name?: string; strict?: boolean }> }>;
+}
+
+function responsesRequestTools(payload: CapturedResponsesPayload | undefined) {
+	const additional = payload?.input?.find((item) => item.type === "additional_tools");
+	return additional?.tools ?? payload?.tools;
 }
 
 function getHeader(headers: CapturedHeaders, name: string): string | null {
@@ -207,6 +213,50 @@ describe("openai-responses provider defaults", () => {
 		expect(capturedPayload?.tools).toEqual([
 			expect.objectContaining({ name: "ordinary", strict: false }),
 			expect.objectContaining({ name: "constrained", strict: true }),
+		]);
+	});
+
+	it("emits strict: false on GitHub Copilot Responses tools (#12286)", async () => {
+		const model = getModel("github-copilot", "gpt-6-luna");
+		let capturedPayload: CapturedResponsesPayload | undefined;
+
+		vi.spyOn(globalThis, "fetch").mockResolvedValue(
+			new Response("data: [DONE]\n\n", {
+				status: 200,
+				headers: { "content-type": "text/event-stream" },
+			}),
+		);
+
+		const stream = streamOpenAIResponses(
+			model,
+			normalizeContext({
+				messages: [{ role: "user", content: "Use a tool.", timestamp: Date.now() }],
+				tools: [
+					{
+						name: "lookup",
+						description: "Look up a model",
+						parameters: Type.Object({
+							provider: Type.Optional(Type.String()),
+							model: Type.Optional(Type.String()),
+						}),
+					},
+				],
+			}),
+			{
+				apiKey: "sk-test-key",
+				onPayload: (payload) => {
+					capturedPayload = payload as CapturedResponsesPayload;
+				},
+			},
+		);
+
+		for await (const event of stream) {
+			if (event.type === "done" || event.type === "error") break;
+		}
+
+		expect(model.compat?.supportsStrictMode).toBe(true);
+		expect(responsesRequestTools(capturedPayload)).toEqual([
+			expect.objectContaining({ name: "lookup", strict: false }),
 		]);
 	});
 
