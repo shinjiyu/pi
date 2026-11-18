@@ -540,6 +540,131 @@ describe("llama.cpp extension", () => {
 		]);
 	});
 
+	// #12282: decision classifiers were hardcoded as text-only. llama.cpp takes Clef's
+	// `images` data-URL list; the TypeSafe default would send `assets` plus an opt-in header.
+	it("advertises image input on decision classifiers when the router reports it", async () => {
+		const systemOneRequests: Array<{ body: Record<string, unknown>; headers: NodeJS.Dict<string | string[]> }> = [];
+		const { url } = await listen((request, response) => {
+			let body = "";
+			request.on("data", (chunk) => {
+				body += chunk;
+			});
+			request.on("end", () => {
+				const requestUrl = new URL(request.url ?? "", "http://localhost");
+				if (requestUrl.pathname === "/v1/systemone") {
+					systemOneRequests.push({
+						body: JSON.parse(body) as Record<string, unknown>,
+						headers: request.headers,
+					});
+					const payload = JSON.parse(body) as { model: string; questions: Record<string, unknown> };
+					json(response, {
+						model: payload.model,
+						answers: Object.fromEntries(
+							Object.keys(payload.questions).map((id) => [id, { type: "noul", noul: 0.7 }]),
+						),
+						usage: { input_tokens: 80, output_tokens: 0 },
+					});
+					return;
+				}
+				response.writeHead(404).end();
+			});
+		});
+
+		const controller = createLlamaProvider();
+		controller.setCatalog(
+			[
+				{
+					id: "clef",
+					status: { value: "loaded" },
+					architecture: { input_modalities: ["text", "image"], output_modalities: ["decisions"] },
+					meta: { n_ctx: 8192 },
+				},
+				{
+					id: "kev",
+					status: { value: "loaded" },
+					architecture: { input_modalities: ["text"], output_modalities: ["decisions"] },
+				},
+				{
+					id: "vision-chat",
+					status: { value: "loaded" },
+					architecture: { input_modalities: ["text", "image"], output_modalities: ["text"] },
+				},
+			],
+			url,
+		);
+
+		const classifiers = controller.provider.getAllModels?.().filter((model) => model.type === "classifier");
+		const clef = classifiers?.find((model) => model.id === "clef");
+		const kev = classifiers?.find((model) => model.id === "kev");
+		const visionChat = classifiers?.find((model) => model.id === "vision-chat");
+		if (clef?.type !== "classifier") throw new Error("missing clef classifier");
+		if (kev?.type !== "classifier") throw new Error("missing kev classifier");
+		if (visionChat?.type !== "classifier") throw new Error("missing vision-chat classifier");
+
+		expect(clef).toEqual(
+			expect.objectContaining({
+				api: "typesafe-system-one",
+				input: ["text", "image"],
+				compat: { imageInput: "images", sendImageOptInHeader: false },
+				contextWindow: 8192,
+			}),
+		);
+		expect(kev).toEqual(expect.objectContaining({ api: "typesafe-system-one", input: ["text"] }));
+		expect(kev.compat).toBeUndefined();
+		expect(visionChat).toEqual(expect.objectContaining({ api: "llama-cpp-classify", input: ["text"] }));
+
+		const questions = {
+			screenshot: {
+				type: "bool" as const,
+				instructions: "Is this a screenshot of a failed build?",
+				criteria: { true: "failed build", false: "something else" },
+			},
+		};
+		const rejected = await controller.provider.classify!(
+			kev,
+			{
+				state: { message: "A PNG is attached." },
+				questions,
+				images: [{ type: "image", data: "cG5n", mimeType: "image/png" }],
+			},
+			{ apiKey: "local" },
+		);
+		expect(rejected.stopReason).toBe("error");
+		expect(rejected.errorMessage).toMatch(/does not support image input/);
+		expect(systemOneRequests).toEqual([]);
+
+		const result = await controller.provider.classify!(
+			clef,
+			{
+				state: { message: "A PNG is attached." },
+				questions,
+				images: [
+					{ type: "image", data: "cG5n", mimeType: "image/png" },
+					{ type: "image", data: "d2VicA==", mimeType: "image/webp" },
+				],
+			},
+			{ apiKey: "local" },
+		);
+		expect(result.errorMessage).toBeUndefined();
+		expect(result.stopReason).toBe("stop");
+		expect(result.answers.screenshot).toEqual({ type: "bool", probability: 0.7 });
+		expect(systemOneRequests).toHaveLength(1);
+		expect(systemOneRequests[0]?.body).toEqual({
+			model: "clef",
+			state: { message: "A PNG is attached." },
+			images: ["data:image/png;base64,cG5n", "data:image/webp;base64,d2VicA=="],
+			questions: {
+				screenshot: {
+					type: "noul",
+					instructions: "Is this a screenshot of a failed build?",
+					criteria: { true: "failed build", false: "something else" },
+				},
+			},
+		});
+		expect(systemOneRequests[0]?.body).not.toHaveProperty("assets");
+		expect(systemOneRequests[0]?.headers["typesafe-danger-zone-images"]).toBeUndefined();
+	});
+
 	it("lists decision models that also output text for chat", () => {
 		const controller = createLlamaProvider();
 		controller.setCatalog(

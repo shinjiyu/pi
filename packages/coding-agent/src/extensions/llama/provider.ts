@@ -105,6 +105,10 @@ function toPiClassifierModel(
 	cachedContextWindow?: number,
 ): ClassifierModel<LlamaClassifierApi> {
 	const decision = isDecisionModel(model);
+	// llama.cpp reports image-capable decision models in the catalog, and its /v1/systemone
+	// endpoint takes Clef's `images` data-URL list (not TypeSafe `assets`). Chat models used
+	// as llama-cpp-classify fallbacks stay text-only; that API has no image path.
+	const image = decision && model.architecture?.input_modalities?.includes("image") === true;
 	return {
 		type: "classifier",
 		id: model.id,
@@ -112,7 +116,8 @@ function toPiClassifierModel(
 		api: decision ? "typesafe-system-one" : "llama-cpp-classify",
 		provider: LLAMA_PROVIDER_ID,
 		baseUrl: decision ? llamaInferenceUrl(serverUrl) : serverUrl,
-		input: ["text"],
+		input: image ? ["text", "image"] : ["text"],
+		...(image && { compat: { imageInput: "images" as const, sendImageOptInHeader: false } }),
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 		contextWindow: contextWindowOf(model, cachedContextWindow),
 	};
