@@ -501,6 +501,9 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 	// Set by bindExtensions(): reload() restarts extensions only if the host started them.
 	private _extensionsBound = false;
+	// Hold extension-started runs until session_start and resources_discover have been applied.
+	private _deferPromptsUntilResourcesApplied = false;
+	private readonly _deferredResourcePrompts: Array<() => Promise<void>> = [];
 
 	private _modelRuntime: ModelRuntime;
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
@@ -2175,6 +2178,10 @@ export class AgentSession {
 	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
+		if (this._deferPromptsUntilResourcesApplied) {
+			this._deferredResourcePrompts.push(async () => await this.prompt(text, options));
+			return;
+		}
 		if (this._isEmittingAgentSettled) {
 			this._deferredSettledActions.push(async () => await this.prompt(text, options));
 			return;
@@ -2494,6 +2501,10 @@ export class AgentSession {
 				this.agent.steer(appMessage);
 			}
 		} else if (options?.triggerTurn) {
+			if (this._deferPromptsUntilResourcesApplied) {
+				this._deferredResourcePrompts.push(async () => await this.sendCustomMessage(message, options));
+				return;
+			}
 			if (this._isEmittingAgentSettled) {
 				this._deferredSettledActions.push(async () => await this.sendCustomMessage(message, options));
 				return;
@@ -3447,9 +3458,39 @@ export class AgentSession {
 
 		this._extensionsBound = true;
 		this._applyExtensionBindings(this._extensionRunner);
-		await this._extensionRunner.emit(this._sessionStartEvent);
-		this._extensionRunner.reportUnhandledMcpServers();
-		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+		await this._withDeferredPromptsUntilResourcesApplied(async () => {
+			await this._extensionRunner.emit(this._sessionStartEvent);
+			this._extensionRunner.reportUnhandledMcpServers();
+			await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+		});
+	}
+
+	/**
+	 * Queue extension-started runs until session_start and resources_discover have finished
+	 * applying skills, prompts, and themes. The initial `pi "<prompt>"` already waits because
+	 * hosts call prompt() after bindExtensions(); sendUserMessage from those handlers did not.
+	 */
+	private async _withDeferredPromptsUntilResourcesApplied(apply: () => Promise<void>): Promise<void> {
+		this._deferPromptsUntilResourcesApplied = true;
+		try {
+			await apply();
+		} finally {
+			this._deferPromptsUntilResourcesApplied = false;
+		}
+		this._flushDeferredResourcePrompts();
+	}
+
+	private _flushDeferredResourcePrompts(): void {
+		const deferred = this._deferredResourcePrompts.splice(0);
+		for (const action of deferred) {
+			void action().catch((err) => {
+				this._extensionRunner.emitError({
+					extensionPath: "<runtime>",
+					event: "send_user_message",
+					error: err instanceof Error ? err.message : String(err),
+				});
+			});
+		}
 	}
 
 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {
@@ -3866,9 +3907,11 @@ export class AgentSession {
 
 		if (this._extensionsBound) {
 			await options?.beforeSessionStart?.();
-			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
-			this._extensionRunner.reportUnhandledMcpServers();
-			await this.extendResourcesFromExtensions("reload");
+			await this._withDeferredPromptsUntilResourcesApplied(async () => {
+				await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
+				this._extensionRunner.reportUnhandledMcpServers();
+				await this.extendResourcesFromExtensions("reload");
+			});
 		}
 	}
 

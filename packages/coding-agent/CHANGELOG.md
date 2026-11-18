@@ -20,6 +20,7 @@
 
 ### Fixed
 
+- Fixed a run that an extension starts from `session_start` or `resources_discover` missing skills, prompts, and themes those handlers return. The run now waits until those resources are applied, like the initial `pi "<prompt>"` ([#12297](https://github.com/earendil-works/pi/issues/12297))
 - Fixed `read` storing a note that the current model does not support images, which was replayed to the model as stale text after switching to a vision model. The image is still replaced with a placeholder per request for models without image input, and the read result now shows the warning in the TUI only, also when collapsed ([#12131](https://github.com/earendil-works/pi/issues/12131))
 - Fixed MCP tools loaded by `tool_search` being dropped on resume and `/reload` when an extension deactivates only its own tool at `session_start`, as pi-web-access and pi-subagents do in `toolActivation: "auto"` mode ([#11996](https://github.com/earendil-works/pi/issues/11996))
 - Fixed the standalone binary failing to resolve extension npm dependencies whose entry point is declared in `package.json` `main` or `exports` (for example `shiki`, `yaml`, `graceful-fs`), including imports made from inside other dependencies ([#12012](https://github.com/earendil-works/pi/issues/12012))
