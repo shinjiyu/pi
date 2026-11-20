@@ -9,6 +9,7 @@
 ### Added
 
 - Added `deepseek-v4.1-flash` and `deepseek-v4.1-flash-1017` to the Qwen Token Plan Individual providers, and per-plan key variables `QWEN_TOKEN_PLAN_TEAM_API_KEY`, `QWEN_TOKEN_PLAN_TEAM_CN_API_KEY`, `QWEN_TOKEN_PLAN_INDIVIDUAL_API_KEY`, and `QWEN_TOKEN_PLAN_INDIVIDUAL_CN_API_KEY`; the shared `QWEN_TOKEN_PLAN_API_KEY` and `QWEN_TOKEN_PLAN_CN_API_KEY` still work ([#11773](https://github.com/earendil-works/pi/issues/11773))
+- Added a transcript notice when OpenAI drops reasoning items from a request, such as `OpenAI dropped 2 reasoning items: prefix_mismatch (details in session)` after compaction on GPT-6.2. Like the Anthropic thinking notice, it is shown when `showCacheMissNotices` is on and only when more items are dropped than in the previous response. Both notices now name the reasons
 
 ### Changed
 
@@ -32,6 +33,7 @@
 - Fixed the bash tool returning no output, with a footer like `[Showing lines 3-2 of 2]`, when the output ends in one line longer than about 100KB, such as a `grep` match in a minified file; it now shows the end of that line ([#12062](https://github.com/earendil-works/pi/issues/12062))
 - Fixed provider errors reading "Connection closed." not triggering automatic retries ([#12064](https://github.com/earendil-works/pi/issues/12064))
 - Fixed `/resume` sometimes selecting an unrelated session while the list reloads after deleting or renaming a session ([#12106](https://github.com/earendil-works/pi/issues/12106))
+- Fixed Groq Qwen models failing with `400 Unexpected message role`; OpenAI-compatible providers other than OpenAI now receive system messages (the system prompt and mid-conversation system messages) with the `system` role ([#10741](https://github.com/earendil-works/pi/issues/10741))
 - Fixed `enabledModels`/`--models` warnings such as `No models match pattern "github-copilot/nope"` being written over the interactive TUI on every `/new`, `/resume` and `/fork`, which left stale lines in fullscreen mode. The warnings are now shown once at startup, in the chat in interactive mode and on stderr in other modes; RPC mode no longer repeats them on stderr for each `new_session`, `switch_session` or `fork` ([#11264](https://github.com/earendil-works/pi/issues/11264))
 - Fixed the find tool matching path patterns through folders above the search path: with the project in `~/src/app`, `src/**/*.ts` returned every `.ts` file in the project ([#12066](https://github.com/earendil-works/pi/issues/12066))
 - Fixed pi crashing with `RangeError: Maximum call stack size exceeded` when rendering a very large edit diff, for example after editing a file with a multi-megabyte line, and again on every resume of that session ([#8036](https://github.com/earendil-works/pi/issues/8036))
