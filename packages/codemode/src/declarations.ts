@@ -259,10 +259,12 @@ function descriptionOf(property: unknown): string {
 
 /**
  * Constraints of a property that its TypeScript type cannot express, as JSDoc-style tags:
- * `@integer @minimum 1 @maximum 100 @default 20`. Empty when there are none.
+ * `@integer @minimum 1 @maximum 100 @default 20`. Array item constraints are prefixed
+ * (`@items.maxLength 300`) because they are not visible in `Array<string>`. Empty when there are none.
  */
-function constraintTags(schema: unknown): string {
+function constraintTags(schema: unknown, seen: Set<unknown> = new Set()): string {
 	if (typeof schema !== "object" || schema === null || Array.isArray(schema)) return "";
+	if (seen.has(schema)) return "";
 	const property = schema as Record<string, unknown>;
 	// Optional fields such as Pydantic's `int | None` keep their constraints in the non-null branch.
 	// The branch's constraints apply together with the property's, so both are read.
@@ -305,6 +307,25 @@ function constraintTags(schema: unknown): string {
 		tags.push(`@default ${JSON.stringify(property.default)}`);
 	}
 	if (property.deprecated === true) tags.push("@deprecated");
+	// Array item constraints are not visible in Array<string>; prefix them (@items.maxLength 300).
+	const nested = new Set(seen);
+	nested.add(schema);
+	const itemTags: string[] = [];
+	const seenItemTags = new Set<string>();
+	for (const candidate of schemas) {
+		const items = candidate.items;
+		if (typeof items !== "object" || items === null || Array.isArray(items)) continue;
+		const inner = constraintTags(items, nested);
+		if (!inner) continue;
+		for (const tag of inner.split(/ (?=@)/)) {
+			const prefixed = tag.replace(/^@/, "@items.");
+			if (!seenItemTags.has(prefixed)) {
+				seenItemTags.add(prefixed);
+				itemTags.push(prefixed);
+			}
+		}
+	}
+	tags.push(...itemTags);
 	return tags
 		.filter((tag) => tag.length <= MAX_TAG_CHARS)
 		.map((tag) => tag.replace(LINE_TERMINATORS, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`))

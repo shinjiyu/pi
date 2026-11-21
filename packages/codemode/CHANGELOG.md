@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed `schemaToType()` omitting constraints of array `items` (for example `maxLength` on `Array<string>`). Those constraints are now shown on the property comment as `@items.*` tags ([#12156](https://github.com/earendil-works/pi/issues/12156))
+
 ## [1.6.0] - 2026-11-20
 
 ## [1.5.2] - 2026-11-10

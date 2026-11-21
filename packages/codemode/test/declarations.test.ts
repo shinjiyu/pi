@@ -105,6 +105,52 @@ describe("schemaToType", () => {
 		);
 	});
 
+	// https://github.com/earendil-works/pi/issues/12156
+	it("puts array item constraints on the property comment with an items prefix", () => {
+		expect(
+			schemaToType({
+				type: "object",
+				properties: {
+					my_array: {
+						type: "array",
+						minItems: 1,
+						maxItems: 5,
+						items: { type: "string", maxLength: 300 },
+					},
+				},
+				required: ["my_array"],
+			}),
+		).toBe(["{", "  // @minItems 1 @maxItems 5 @items.maxLength 300", "  my_array: Array<string>;", "}"].join("\n"));
+		// Nested arrays prefix each items schema (@items.minItems, @items.items.maxLength).
+		expect(
+			schemaToType({
+				type: "object",
+				properties: {
+					grid: {
+						type: "array",
+						items: { type: "array", minItems: 1, items: { type: "string", maxLength: 10 } },
+					},
+				},
+				required: ["grid"],
+			}),
+		).toBe(
+			["{", "  // @items.minItems 1 @items.items.maxLength 10", "  grid: Array<Array<string>>;", "}"].join("\n"),
+		);
+		// Object item constraints stay on the inner property comments, not as @items.* on the array.
+		expect(
+			schemaToType({
+				type: "object",
+				properties: {
+					rows: {
+						type: "array",
+						items: { type: "object", properties: { name: { type: "string", maxLength: 300 } } },
+					},
+				},
+				required: ["rows"],
+			}),
+		).toBe(["{ rows: Array<{", "  // @maxLength 300", "  name?: string;", "}>; }"].join("\n"));
+	});
+
 	it("reads constraints of optional fields from the non-null branch", () => {
 		// Pydantic's `limit: int | None = Field(None, ge=1, le=100)`.
 		expect(
