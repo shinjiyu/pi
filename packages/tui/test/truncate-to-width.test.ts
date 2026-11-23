@@ -4,6 +4,7 @@ import { hyperlink } from "../src/terminal-image.ts";
 import {
 	getOsc8LinkAtColumn,
 	getOsc8LinkSpanAtColumn,
+	getSchemeUrlSpanAtColumn,
 	normalizeTerminalOutput,
 	truncateToWidth,
 	visibleWidth,
@@ -146,6 +147,34 @@ describe("getOsc8LinkSpanAtColumn", () => {
 			assert.strictEqual(getOsc8LinkAtColumn(line, start), url);
 			assert.strictEqual(getOsc8LinkSpanAtColumn(line, start - 1), undefined);
 			assert.strictEqual(getOsc8LinkSpanAtColumn(line, end), undefined);
+		}
+	});
+});
+
+describe("getSchemeUrlSpanAtColumn", () => {
+	it("identifies Ghostty-style scheme URLs and ignores wrapping punctuation", () => {
+		const cases: Array<{ line: string; needle: string; expected: string | undefined }> = [
+			{ line: "hello https://example.com world", needle: "example", expected: "https://example.com" },
+			{ line: "https://example.com/foo(bar) more", needle: "foo", expected: "https://example.com/foo(bar)" },
+			{ line: "https://example.com/foo(bar)baz more", needle: "baz", expected: "https://example.com/foo(bar)baz" },
+			{ line: "Link inside (https://example.com) parens", needle: "example", expected: "https://example.com" },
+			{ line: "Link period https://example.com. More text.", needle: "example", expected: "https://example.com" },
+			{ line: "Link trailing comma https://example.com, more text.", needle: "example", expected: "https://example.com" },
+			{ line: 'Link in double quotes "https://example.com" and more', needle: "example", expected: "https://example.com" },
+			{ line: "Link in single quotes 'https://example.com' and more", needle: "example", expected: "https://example.com" },
+			{ line: "also match http://example.com non-secure links", needle: "example", expected: "http://example.com" },
+			{ line: "match with query url https://example.com?query=1&other=2 and more text.", needle: "query=1", expected: "https://example.com?query=1&other=2" },
+			{ line: "dot.http://example.com", needle: "example", expected: "http://example.com" },
+			{ line: "IPv6 localhost http://[::1]:3000", needle: "::1", expected: "http://[::1]:3000" },
+			{ line: "https://en.wikipedia.org/wiki/Rust_(video_game)", needle: "wiki", expected: "https://en.wikipedia.org/wiki/Rust_(video_game)" },
+			{ line: "Note: hello", needle: "Note", expected: undefined },
+			{ line: "see src/config/url.zig.", needle: "config", expected: undefined },
+			{ line: "/path/xyz $ cat example", needle: "cat", expected: undefined },
+		];
+		for (const { line, needle, expected } of cases) {
+			const column = line.indexOf(needle);
+			assert.ok(column >= 0, "needle " + JSON.stringify(needle) + " missing from " + JSON.stringify(line));
+			assert.strictEqual(getSchemeUrlSpanAtColumn(line, column)?.url, expected, line);
 		}
 	});
 });

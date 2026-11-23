@@ -53,6 +53,7 @@ import {
 	getGraphemeCellRange,
 	getOsc8LinkAtColumn,
 	getOsc8LinkSpanAtColumn,
+	getSchemeUrlSpanAtColumn,
 	getWordSegmenter,
 	sliceByColumn,
 	stripTerminalSequences,
@@ -1201,6 +1202,14 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 
 		const line = stripTerminalSequences(rawLine);
+		const url = getSchemeUrlSpanAtColumn(line, point.col);
+		if (url) {
+			return {
+				start: { ...point, col: url.start },
+				end: { ...point, col: url.end, boundary: true },
+			};
+		}
+
 		const segments: Array<{
 			start: number;
 			end: number;

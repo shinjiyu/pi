@@ -537,6 +537,37 @@ export function getOsc8LinkAtColumn(line: string, column: number): string | unde
 }
 
 /**
+ * Ghostty-style scheme URL matcher used for fullscreen double-click selection.
+ * This is the scheme branch from Ghostty's default link regex (src/config/url.zig):
+ * known schemes, IPv6 hosts, and trailing "." / "," / wrapping ")" heuristics.
+ * Path-shaped branches are omitted because they over-select in Ghostty itself.
+ */
+const SCHEME_URL_PATTERN_SOURCE =
+	"(?:https?://|mailto:|ftp://|file:|ssh:|git://|ssh://|tel:|magnet:|ipfs://|ipns://|gemini://|gopher://|news:)" +
+	"(?:(?:\\[[:0-9a-fA-F]+(?:[:0-9a-fA-F]*)+\\](?::[0-9]+)?)|[\\w\\-.~:/?#@!$&*+,;=%]+(?:[\\(\\[]\\w*[\\)\\]])?)+(?<![,.])";
+
+export interface SchemeUrlSpan {
+	start: number;
+	end: number;
+	url: string;
+}
+
+/** Return the scheme-URL span covering a visible column in already-stripped text. */
+export function getSchemeUrlSpanAtColumn(line: string, column: number): SchemeUrlSpan | undefined {
+	const pattern = new RegExp(SCHEME_URL_PATTERN_SOURCE, "g");
+	let match: RegExpExecArray | null;
+	while ((match = pattern.exec(line))) {
+		const start = visibleWidth(line.slice(0, match.index));
+		const end = start + visibleWidth(match[0]);
+		if (column >= start && column < end) {
+			return { start, end, url: match[0] };
+		}
+		if (match[0].length === 0) pattern.lastIndex += 1;
+	}
+	return undefined;
+}
+
+/**
  * Normalize text for terminal output without changing logical editor content.
  * Some terminals render precomposed Thai/Lao AM vowels inconsistently during
  * differential repaint. Their compatibility decompositions have the same cell

@@ -1784,13 +1784,23 @@ describe("TuiAltScreen", () => {
 			{ line: hyperlink(url, url), needle: "https", expected: url },
 			{ line: belUrl, needle: "org", expected: url },
 			{ line: `see ${hyperlink(url, url)}.`, needle: "repo", expected: url },
+			{ line: url, needle: "github", expected: url },
+			{ line: url, needle: "https", expected: url },
+			{ line: "see " + url + ".", needle: "repo", expected: url },
+			{ line: "Link inside (" + url + ") parens", needle: "github", expected: url },
+			{
+				line: "https://en.wikipedia.org/wiki/Rust_(video_game)",
+				needle: "wiki",
+				expected: "https://en.wikipedia.org/wiki/Rust_(video_game)",
+			},
 			{ line: "see src/config/url.zig.", needle: "config", expected: "src/config/url.zig" },
+			{ line: "/path/xyz $ cat example", needle: "cat", expected: "cat" },
 			{ line: "Version v1.2.3.", needle: "v1", expected: "v1.2.3" },
 			{ line: "compositor.ts", needle: "ts", expected: "compositor.ts" },
 			{ line: "Note: hello", needle: "Note", expected: "Note" },
 		]) {
 			const copied: string[] = [];
-			const terminal = new RecordingTerminal(80, 1);
+			const terminal = new RecordingTerminal(120, 1);
 			const tui = new TuiAltScreen(terminal, undefined, undefined, {
 				copySelection: async (text) => {
 					copied.push(text);
